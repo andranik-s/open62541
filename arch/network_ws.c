@@ -104,6 +104,29 @@ freeConnection(UA_Connection *connection) {
     UA_Connection_clear(connection);
     UA_free(connection);
 }
+// #include <math.h>
+// static void printChunk(const UA_ByteString *buf) {
+// printf("chunk:\n");
+//             size_t llength = 16;
+//             for(size_t line = 0; line < (size_t)ceil((float)buf->length/(float)llength); ++line) {
+//                 printf("%04x   ", (unsigned int)line);
+//                 size_t i;
+//                 for (i = 0; i < 16 && line*llength+i < buf->length; ++i)
+//                     printf("%02x ", (unsigned int)buf->data[line*llength+i]);
+//                 if (i < 16) for (; i < 16; ++i) printf("   ");
+
+//                 printf("  ");
+
+//                 for (i = 0; i < 16 && line*llength+i < buf->length; ++i) {
+//                     char ch = (char)buf->data[line*llength+i];
+//                     printf("%c", ch > 31 && ch < 127 ? ch : '.');
+//                 }
+//                 if (i < 16) for (; i < 16; ++i) putchar(' ');
+
+//                 printf("\n");
+//             }
+//             printf("\n");
+// }
 
 static int
 callback_opcua(struct lws *wsi, enum lws_callback_reasons reason, void *user, void *in,
@@ -198,6 +221,7 @@ callback_opcua(struct lws *wsi, enum lws_callback_reasons reason, void *user, vo
 
             if(pss->connection->incompleteChunk.length == 0) {
                 UA_ByteString message = {len, (UA_Byte *)in};
+                //printChunk(&message);
                 UA_Server_processBinaryMessage(layer->server, pss->connection, &message);
             } else {
                 UA_ByteString message = pss->connection->incompleteChunk;
@@ -210,9 +234,8 @@ callback_opcua(struct lws *wsi, enum lws_callback_reasons reason, void *user, vo
                 memcpy(&t[message.length], in, len);
                 message.data = t;
                 message.length += len;
-
+                //printChunk(&message);
                 UA_Server_processBinaryMessage(layer->server, pss->connection, &message);
-
                 connection_releaserecvbuffer(pss->connection, &message);
             }
             break;
