@@ -599,15 +599,14 @@ processMSGDecoded(UA_Server *server, UA_SecureChannel *channel, UA_UInt32 reques
 
 #if UA_MULTITHREADING >= 100
     /* The call request might not be answered immediately */
-    if(requestType == &UA_TYPES[UA_TYPES_CALLREQUEST]) {
-        UA_Boolean finished = true;
+    UA_Service_async asyncService = UA_getAsyncService(requestType);
+    if(asyncService) {
         UA_LOCK(server->serviceMutex);
-        Service_CallAsync(server, session, requestId, (const UA_CallRequest*)requestHeader,
-                          (UA_CallResponse*)responseHeader, &finished);
+        asyncService(server, session, requestId, requestHeader, responseHeader);
         UA_UNLOCK(server->serviceMutex);
 
         /* Async method calls remain. Don't send a response now */
-        if(!finished)
+        if(responseHeader->serviceResult == UA_STATUSCODE_GOODCOMPLETESASYNCHRONOUSLY)
             return UA_STATUSCODE_GOOD;
 
         /* We are done here */
@@ -703,7 +702,13 @@ processMSG(UA_Server *server, UA_SecureChannel *channel,
     /* Continue with the decoded Request */
     retval = processMSGDecoded(server, channel, requestId, service, requestHeader, requestType,
                                responseHeader, responseType, sessionRequired);
-
+#if UA_MULTITHREADING >= 100
+    /* Do not clear the request if it requires async processing */
+    if(responseHeader->serviceResult == UA_STATUSCODE_GOODCOMPLETESASYNCHRONOUSLY) {
+        UA_clear(responseHeader, responseType);
+        return retval;
+    }
+#endif
     /* Clean up */
     UA_clear(request, requestType);
     UA_clear(responseHeader, responseType);

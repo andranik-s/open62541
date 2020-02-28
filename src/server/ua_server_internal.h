@@ -97,7 +97,7 @@ struct UA_Server {
     UA_UInt32 lastTokenId;
 
 #if UA_MULTITHREADING >= 100
-    UA_AsyncManager asyncManager;
+    UA_AsyncManager *asyncManager;
 #endif
 
     /* Session Management */
