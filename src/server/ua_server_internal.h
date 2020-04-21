@@ -155,6 +155,10 @@ struct UA_Server {
 
     /* Statistics */
     UA_ServerStatistics serverStats;
+
+#ifdef UA_ENABLE_CUSTOM_ALARMS_CONDITIONS
+    void *aacCtx;
+#endif
 };
 
 /**************************/
@@ -263,6 +267,13 @@ referenceSubtypes(UA_Server *server, const UA_NodeId *refType,
 UA_StatusCode
 getParentTypeAndInterfaceHierarchy(UA_Server *server, const UA_NodeId *typeNode,
                                    UA_NodeId **typeHierarchy, size_t *typeHierarchySize);
+
+#ifdef UA_ENABLE_CUSTOM_ALARMS_CONDITIONS
+
+UA_StatusCode UA_EXPORT
+UA_getConditionId(UA_Server *server, const UA_NodeId *conditionNodeId, UA_NodeId *outConditionId);
+
+#endif
 
 #ifdef UA_ENABLE_SUBSCRIPTIONS_ALARMS_CONDITIONS
 
@@ -511,6 +522,12 @@ UA_StatusCode writeNs0VariableArray(UA_Server *server, UA_UInt32 id, void *v,
 
 #define UA_NODESTORE_REMOVE(server, nodeId)                             \
     server->config.nodestore.removeNode(server->config.nodestore.context, nodeId)
+
+#ifdef UA_ENABLE_CUSTOM_ALARMS_CONDITIONS
+UA_StatusCode
+copyNodeChildren(UA_Server *server, UA_Session *session,
+                 const UA_NodeId *source, const UA_NodeId *destination);
+#endif
 
 _UA_END_DECLS
 

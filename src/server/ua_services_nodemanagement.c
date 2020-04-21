@@ -2275,3 +2275,11 @@ UA_Server_setNodeTypeLifecycle(UA_Server *server, UA_NodeId nodeId,
     UA_UNLOCK(server->serviceMutex);
     return retval;
 }
+
+#ifdef UA_ENABLE_CUSTOM_ALARMS_CONDITIONS
+UA_StatusCode
+copyNodeChildren(UA_Server *server, UA_Session *session,
+                 const UA_NodeId *source, const UA_NodeId *destination) {
+    return copyAllChildren(server, session, source, destination);
+}
+#endif

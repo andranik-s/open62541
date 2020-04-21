@@ -1355,6 +1355,13 @@ UA_Server_triggerEvent(UA_Server *server, const UA_NodeId eventNodeId, const UA_
 
 #endif /* UA_ENABLE_SUBSCRIPTIONS_EVENTS */
 
+#ifdef UA_ENABLE_CUSTOM_ALARMS_CONDITIONS
+
+UA_StatusCode UA_EXPORT
+UA_Server_initCondtion(UA_Server *server, const UA_NodeId condition, const UA_NodeId conditionSource);
+
+#endif
+
 #ifdef UA_ENABLE_SUBSCRIPTIONS_ALARMS_CONDITIONS
 typedef enum UA_TwoStateVariableCallbackType {
   UA_ENTERING_ENABLEDSTATE,

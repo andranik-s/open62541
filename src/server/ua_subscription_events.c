@@ -197,7 +197,7 @@ resolveSimpleAttributeOperand(UA_Server *server, UA_Session *session, const UA_N
     if(sao->browsePathSize == 0) {
       UA_NodeId conditionTypeId = UA_NODEID_NUMERIC(0, UA_NS0ID_CONDITIONTYPE);
 
-#ifdef UA_ENABLE_SUBSCRIPTIONS_ALARMS_CONDITIONS
+#if defined(UA_ENABLE_SUBSCRIPTIONS_ALARMS_CONDITIONS) || defined(UA_ENABLE_CUSTOM_ALARMS_CONDITIONS)
       //TODO check for Branches! One Condition could have multiple Branches
       // Set ConditionId
       if(UA_NodeId_equal(&sao->typeDefinitionId, &conditionTypeId)){
