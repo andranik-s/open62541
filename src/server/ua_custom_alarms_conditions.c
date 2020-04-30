@@ -113,7 +113,7 @@ deepCopyNode(UA_Server *server, const UA_NodeId source, UA_NodeId *dest) {
     retval = copyNodeChildren(server, &server->adminSession, &source, dest);
     UA_NodeId *sourceIdForCtx = UA_NodeId_new();
     UA_NodeId_copy(&source, sourceIdForCtx);
-    UA_Server_setNodeContext(server, *dest, sourceIdForCtx);
+    UA_Server_setNodeContext(server, *dest, sourceIdForCtx); //TODO: clear context
 
 /*
     UA_Server_addReference(server, UA_NODEID_NUMERIC(0, UA_NS0ID_OBJECTSFOLDER), UA_NODEID_NUMERIC(0, UA_NS0ID_HASCOMPONENT),
@@ -128,7 +128,7 @@ deepCopyNode(UA_Server *server, const UA_NodeId source, UA_NodeId *dest) {
     static UA_StatusCode write_##ctype(UA_Server *server, UA_NodeId obj,                 \
                                        const UA_QualifiedName prop, ctype cv) {          \
         UA_Variant v;                                                                    \
-        UA_Variant_setScalarCopy(&v, &cv, &UA_TYPES[uatype]);                            \
+        UA_Variant_setScalar(&v, &cv, &UA_TYPES[uatype]);                                \
         return writeObjectProperty(server, obj, prop, v);                                \
     }
 
@@ -262,7 +262,7 @@ setConditionVariable(UA_Server *server, const UA_NodeId condition, const UA_Qual
 
 static UA_StatusCode
 setTwoStateVariable(UA_Server *server, const UA_NodeId condition, 
-                    const UA_QualifiedName variable, const UA_LocalizedText text, bool id) {
+                    const UA_QualifiedName variable, UA_LocalizedText text, bool id) {
     UA_StatusCode retval = UA_STATUSCODE_GOOD;
     UA_NodeId varNodeId = UA_NODEID_NULL;
 
@@ -276,7 +276,7 @@ setTwoStateVariable(UA_Server *server, const UA_NodeId condition,
     }
 
     UA_Variant vtext_;
-    UA_Variant_setScalarCopy(&vtext_, &text, &UA_TYPES[UA_TYPES_LOCALIZEDTEXT]);
+    UA_Variant_setScalar(&vtext_, &text, &UA_TYPES[UA_TYPES_LOCALIZEDTEXT]);
 
     retval |= UA_Server_writeValue(server, varNodeId, vtext_);
     retval |= write_UA_Boolean(server, varNodeId, UA_TWOSTATE_ID, id);
@@ -301,8 +301,10 @@ getTwoStateVariableId(UA_Server *server, const UA_NodeId condition,
 
     UA_Variant v;
     retval = UA_Server_readObjectProperty(server, varNodeId, UA_TWOSTATE_ID, &v);
-    if(retval == UA_STATUSCODE_GOOD)
+    if(retval == UA_STATUSCODE_GOOD) {
         *id = *(UA_Boolean*)v.data;
+        UA_Variant_clear(&v);
+    }
 
     return retval;
 }
@@ -349,21 +351,21 @@ setConfirmedState(UA_Server *server, const UA_NodeId condition, UA_Boolean isEna
 static UA_StatusCode
 setComment(UA_Server *server, const UA_NodeId condition, UA_LocalizedText comment) {
     UA_Variant v;
-    UA_Variant_setScalarCopy(&v, &comment, &UA_TYPES[UA_TYPES_LOCALIZEDTEXT]);
+    UA_Variant_setScalar(&v, &comment, &UA_TYPES[UA_TYPES_LOCALIZEDTEXT]);
     return setConditionVariable(server, condition, UA_CONDITION_COMMENT, v);
 }
 
 static UA_StatusCode
 setLastSeveriry(UA_Server *server, const UA_NodeId condition, UA_UInt16 severity) {
     UA_Variant v;
-    UA_Variant_setScalarCopy(&v, &severity, &UA_TYPES[UA_TYPES_UINT16]);
+    UA_Variant_setScalar(&v, &severity, &UA_TYPES[UA_TYPES_UINT16]);
     return setConditionVariable(server, condition, UA_CONDITION_LASTSEVERITY, v);
 }
 
 static UA_StatusCode
 setQuality(UA_Server *server, const UA_NodeId condition, UA_StatusCode statusCode) {
     UA_Variant v;
-    UA_Variant_setScalarCopy(&v, &statusCode, &UA_TYPES[UA_TYPES_STATUSCODE]);
+    UA_Variant_setScalar(&v, &statusCode, &UA_TYPES[UA_TYPES_STATUSCODE]);
     return setConditionVariable(server, condition, UA_CONDITION_QUALITY, v);
 }
 
