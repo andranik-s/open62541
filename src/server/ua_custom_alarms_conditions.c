@@ -16,6 +16,7 @@
 #define UA_CONDITION_ACKEDSTATE UA_QUALIFIEDNAME(0, "AckedState")
 #define UA_CONDITION_CONFIRMEDSTATE UA_QUALIFIEDNAME(0, "ConfirmedState")
 #define UA_CONDITION_EVENTTYPE UA_QUALIFIEDNAME(0, "EventType")
+#define UA_ALARM_ACTIVESTATE UA_QUALIFIEDNAME(0, "ActiveState")
 
 #define LOCALE ""
 #define UA_ENABLED_TXT UA_LOCALIZEDTEXT(LOCALE, (char*)"Enabled")
@@ -24,15 +25,27 @@
 #define UA_NACKED_TXT UA_LOCALIZEDTEXT(LOCALE, (char*)"Unacknowledged")
 #define UA_CONFIRMED_TXT UA_LOCALIZEDTEXT(LOCALE, (char*)"Confirmed")
 #define UA_NCONFIRMED_TXT UA_LOCALIZEDTEXT(LOCALE, (char*)"Unconfirmed")
+#define UA_ACTIVE_TXT UA_LOCALIZEDTEXT(LOCALE, (char*)"Active")
+#define UA_NACTIVE_TXT UA_LOCALIZEDTEXT(LOCALE, (char*)"Inactive")
 
 struct EventsEntry {
-    SLIST_ENTRY(EventsEntry) listEntry;
+    LIST_ENTRY(EventsEntry) listEntry;
     UA_ByteString eventId;
     UA_NodeId conditionId;
 };
 
+static void EventsEntry_clear(struct EventsEntry *ee) {
+    UA_ByteString_clear(&ee->eventId);
+    UA_NodeId_clear(&ee->conditionId);
+}
+
+static void EventsEntry_delete(struct EventsEntry *ee) {
+    EventsEntry_clear(ee);
+    free(ee);
+}
+
 struct Events {
-    SLIST_HEAD(, EventsEntry) list;
+    LIST_HEAD(, EventsEntry) list;
 };
 
 static void
@@ -126,6 +139,19 @@ DEFINE_WRITE_SCALAR_PROPERTY_FUNCTION(UA_LocalizedText, UA_TYPES_LOCALIZEDTEXT)
 DEFINE_WRITE_SCALAR_PROPERTY_FUNCTION(UA_NodeId, UA_TYPES_NODEID)
 DEFINE_WRITE_SCALAR_PROPERTY_FUNCTION(UA_String, UA_TYPES_STRING)
 
+#define DEFINE_READ_SCALAR_PROPERTY_FUNCTION(ctype, uatype)                              \
+    static UA_StatusCode read_##ctype(UA_Server *server, UA_NodeId obj,                  \
+                                      const UA_QualifiedName prop, ctype **cv) {         \
+        UA_Variant v;                                                                    \
+        UA_StatusCode retval = readObjectProperty(server, obj, prop, &v);                \
+        v.storageType = UA_VARIANT_DATA_NODELETE;                                        \
+        *cv = (ctype *)v.data;                                                           \
+        UA_Variant_clear(&v);                                                            \
+        return retval;                                                                   \
+    }
+
+DEFINE_READ_SCALAR_PROPERTY_FUNCTION(UA_NodeId, UA_TYPES_NODEID)
+
 static UA_StatusCode
 getNodeType_(UA_Server *server, const UA_NodeId nodeId, UA_NodeId *nodeTypeId) {
     UA_StatusCode statusCode = UA_STATUSCODE_GOOD;
@@ -201,7 +227,7 @@ UA_getConditionId(UA_Server *server, const UA_NodeId *conditionNodeId, UA_NodeId
 
     struct EventsEntry *ee = NULL;
     struct Events* events = ((struct Events*)server->aacCtx);
-    SLIST_FOREACH(ee, &events->list, listEntry) {
+    LIST_FOREACH(ee, &events->list, listEntry) {
         if(UA_NodeId_equal(&ee->conditionId, conditionNodeId)){
             UA_NodeId *source;
             UA_Server_getNodeContext(server, ee->conditionId, (void**)&source);
@@ -304,10 +330,21 @@ getAckedState(UA_Server *server, const UA_NodeId condition, UA_Boolean *isEnable
 }
 
 static UA_StatusCode
+setActiveState(UA_Server *server, const UA_NodeId condition, UA_Boolean isEnabled) {
+    UA_LocalizedText text = isEnabled ? UA_ACTIVE_TXT : UA_NACTIVE_TXT;
+    return setTwoStateVariable(server, condition, UA_ALARM_ACTIVESTATE, text, isEnabled);
+}
+
+// static UA_StatusCode
+// getActiveState(UA_Server *server, const UA_NodeId condition, UA_Boolean *isEnabled) {
+//     return getTwoStateVariableId(server, condition, UA_ALARM_ACTIVESTATE, isEnabled);
+// }
+
+/*static UA_StatusCode
 setConfirmedState(UA_Server *server, const UA_NodeId condition, UA_Boolean isEnabled) {
     UA_LocalizedText text = isEnabled ? UA_CONFIRMED_TXT : UA_NCONFIRMED_TXT;
     return setTwoStateVariable(server, condition, UA_CONDITION_CONFIRMEDSTATE, text, isEnabled);
-}
+}*/
 
 static UA_StatusCode
 setComment(UA_Server *server, const UA_NodeId condition, UA_LocalizedText comment) {
@@ -360,6 +397,16 @@ setSeverity(UA_Server *server, const UA_NodeId condition, UA_UInt16 severity) {
     retval |= write_UA_UInt16(server, condition, UA_CONDITION_SEVERITY, severity);
 
     return retval;
+}
+
+static UA_StatusCode
+setSourceNode(UA_Server *server, const UA_NodeId condition, const UA_NodeId sourceNode) {
+    return write_UA_NodeId(server, condition, UA_QUALIFIEDNAME(0, "SourceNode"), sourceNode);
+}
+
+static UA_StatusCode
+getSourceNode(UA_Server *server, const UA_NodeId condition, UA_NodeId **sourceNode) {
+    return read_UA_NodeId(server, condition, UA_QUALIFIEDNAME(0, "SourceNode"), sourceNode);
 }
 
 /*static UA_StatusCode
@@ -577,8 +624,25 @@ triggerConditionEnableAuditEvent(UA_Server *server, const UA_NodeId condition, U
 // }
 
 static UA_StatusCode
-triggerCondition(UA_Server *server, const UA_NodeId conditionId, const UA_NodeId originId) {
+initEvent(UA_Server *server, const UA_NodeId eventId) {
+    UA_StatusCode retval;
+    retval = write_UA_DateTime(server, eventId, UA_QUALIFIEDNAME(0, "Time"), UA_DateTime_now());
+    return retval;
+}
+
+static UA_StatusCode
+createBranch(UA_Server *server, const UA_NodeId conditionId, UA_NodeId *branchId) {
     static unsigned int bn = 1;
+    UA_StatusCode retval;
+    retval = deepCopyNode(server, conditionId, branchId);
+    retval |= write_UA_NodeId(server, *branchId, UA_QUALIFIEDNAME(0, "BranchId"), UA_NODEID_NUMERIC(11, bn++));
+    retval |= setAckedState(server, *branchId, UA_FALSE);
+    //retval |= setConfirmedState(server, condition, UA_FALSE);
+    return retval;
+}
+
+static UA_StatusCode
+triggerCondition(UA_Server *server, const UA_NodeId conditionId, const UA_NodeId originId) {
     UA_StatusCode retval = UA_STATUSCODE_GOOD;
 
     struct Events* events = ((struct Events*)server->aacCtx);
@@ -587,8 +651,7 @@ triggerCondition(UA_Server *server, const UA_NodeId conditionId, const UA_NodeId
     UA_NodeId conditionType;
     getNodeType_(server, conditionId, &conditionType);
     if(isAcknowlageableConditionType(server, conditionType)) {
-        deepCopyNode(server, conditionId, &entry->conditionId);
-        retval |= write_UA_NodeId(server, entry->conditionId, UA_QUALIFIEDNAME(0, "BranchId"), UA_NODEID_NUMERIC(11, bn++));
+        createBranch(server, conditionId, &entry->conditionId);
     } else {
         UA_NodeId_copy(&conditionId, &entry->conditionId);
     }
@@ -596,11 +659,12 @@ triggerCondition(UA_Server *server, const UA_NodeId conditionId, const UA_NodeId
     /*retval |= setTime(server, entry->conditionId, UA_DateTime_now());
     retval |= eventSetStandardFields(server, &entry->conditionId, &conditionId, &entry->eventId);
 
-    SLIST_INSERT_HEAD(&events->list, entry, listEntry);
+    LIST_INSERT_HEAD(&events->list, entry, listEntry);
 
     retval |= UA_Server_triggerEvent2(server, entry->conditionId, conditionId, &entry->eventId, UA_FALSE);*/
 
-    SLIST_INSERT_HEAD(&events->list, entry, listEntry);
+    initEvent(server, entry->conditionId);
+    LIST_INSERT_HEAD(&events->list, entry, listEntry);
     retval |= UA_Server_triggerEvent(server, entry->conditionId, conditionId, &entry->eventId, UA_FALSE);
 
     return retval;
@@ -687,28 +751,100 @@ initCondtion(UA_Server *server, const UA_NodeId condition, const UA_NodeId condi
 
     retval |= addHasConditionRefence(server, condition, conditionSource);
     retval |= setEventType(server, condition, eventTypeId);
+    retval |= setSourceNode(server, condition, conditionSource);
     retval |= setRetain(server, condition, UA_TRUE);
     retval |= setEnabledState(server, condition, UA_TRUE);
     retval |= setComment(server, condition, UA_LOCALIZEDTEXT(LOCALE, ""));
     retval |= setSeverity(server, condition, DEFAULT_SEVERITY);
     retval |= setQuality(server, condition, UA_STATUSCODE_GOOD);
-    retval |= setEnableMethod(server);
-    retval |= setDisableMethod(server);
 
     return retval;
 }
 
 static UA_StatusCode
+getParent(UA_Server *server, const UA_NodeId *field, UA_NodeId *parent) {
+    *parent = UA_NODEID_NULL;
+    UA_NodeId hasPropertyType = UA_NODEID_NUMERIC(0, UA_NS0ID_HASPROPERTY);
+    UA_NodeId hasComponentType = UA_NODEID_NUMERIC(0, UA_NS0ID_HASCOMPONENT);
+    const UA_Node *fieldNode = UA_NODESTORE_GET(server, field);
+    if(!fieldNode)
+        return UA_STATUSCODE_BADNOTFOUND;
+    UA_StatusCode retval = UA_STATUSCODE_BADNOTFOUND;
+    for(size_t i = 0; i < fieldNode->referencesSize; i++) {
+        UA_NodeReferenceKind *rk = &fieldNode->references[i];
+        if((UA_NodeId_equal(&rk->referenceTypeId, &hasPropertyType) ||
+            UA_NodeId_equal(&rk->referenceTypeId, &hasComponentType)) &&
+           true == rk->isInverse) {
+            retval = UA_NodeId_copy(&rk->refTargets->targetId.nodeId, parent);
+            break;
+        }
+    }
+    UA_NODESTORE_RELEASE(server, (const UA_Node *)fieldNode);
+    return retval;
+}
+
+static void
+setAlramActiveCallback(UA_Server *server, const UA_NodeId *sessionId,
+                    void *sessionContext, const UA_NodeId *nodeId,
+                    void *nodeContext, const UA_NumericRange *range,
+                    const UA_DataValue *data) {
+    UA_NodeId twoStateVariableId;
+    UA_StatusCode retval = getParent(server, nodeId, &twoStateVariableId);
+    if(retval)
+        return;
+    UA_NodeId alarmId;
+    retval = getParent(server, &twoStateVariableId, &alarmId);
+    if(retval)
+        return;
+    bool currentActive = *(UA_Boolean*)data->value.data;
+    bool prevActive = !currentActive;
+    UA_Variant activeTxt;
+    retval = UA_Server_readValue(server, twoStateVariableId, &activeTxt);
+    if(!retval) {
+        if(activeTxt.type == &UA_TYPES[UA_TYPES_LOCALIZEDTEXT]) {
+            UA_LocalizedText *txt = (UA_LocalizedText*)activeTxt.data;
+            UA_LocalizedText acTxt = UA_ACTIVE_TXT;
+            prevActive = UA_String_equal(&txt->locale, &acTxt.locale) &&
+                UA_String_equal(&txt->text, &acTxt.text);
+        }
+        UA_Variant_clear(&activeTxt);
+    }
+    UA_LocalizedText acTxt = currentActive ? UA_ACTIVE_TXT : UA_NACTIVE_TXT;
+    UA_Variant_setScalar(&activeTxt, &acTxt, &UA_TYPES[UA_TYPES_LOCALIZEDTEXT]);
+    UA_Server_writeValue(server, twoStateVariableId, activeTxt);
+    if(currentActive != prevActive) {
+        UA_NodeId *sourceNode;
+        getSourceNode(server, alarmId, &sourceNode);
+        triggerCondition(server, alarmId, *sourceNode);
+        UA_NodeId_delete(sourceNode);
+    }
+    UA_NodeId_clear(&twoStateVariableId);
+    UA_NodeId_clear(&alarmId);
+}
+
+static UA_StatusCode
 initAlarmCondition(UA_Server *server, const UA_NodeId condition) {
     UA_StatusCode retval = UA_STATUSCODE_GOOD;
-
+    retval |= setActiveState(server, condition, false);
+    UA_STACKARRAY(UA_QualifiedName, idpath, 2) = { UA_QUALIFIEDNAME(0, "ActiveState"), UA_QUALIFIEDNAME(0, "Id") };
+    UA_BrowsePathResult bpr = UA_Server_browseSimplifiedBrowsePath(server, condition, 2, idpath);
+    if(bpr.statusCode != UA_STATUSCODE_GOOD)
+        return bpr.statusCode;
+    if(bpr.targetsSize != 1)
+        return UA_STATUSCODE_BADINTERNALERROR;
+    UA_NodeId activeStateId = bpr.targets[0].targetId.nodeId;
+    UA_ValueCallback callback;
+    callback.onRead = NULL;
+    callback.onWrite = setAlramActiveCallback;
+    UA_Server_setVariableNode_valueCallback(server, activeStateId, callback);
+    UA_BrowsePathResult_deleteMembers(&bpr);
     return retval;
 }
 
 static UA_StatusCode
 initAcknowlagebleCondtion(UA_Server *server, const UA_NodeId condition) {
     UA_StatusCode retval = UA_STATUSCODE_GOOD;
-    UA_VariableAttributes attr = UA_VariableAttributes_default;
+    /*UA_VariableAttributes attr = UA_VariableAttributes_default;
     attr.displayName.locale = UA_STRING("");
     attr.displayName.text = UA_CONDITION_CONFIRMEDSTATE.name;
     UA_NodeId_copy(&UA_TYPES[UA_TYPES_LOCALIZEDTEXT].typeId, &attr.dataType);
@@ -718,10 +854,7 @@ initAcknowlagebleCondtion(UA_Server *server, const UA_NodeId condition) {
         UA_NODEID_NUMERIC(0, UA_NS0ID_TWOSTATEVARIABLETYPE), attr, NULL, NULL);
 
     retval |= UA_Server_addReference(server, condition, UA_NODEID_NUMERIC(0, UA_NS0ID_HASCOMPONENT),
-                                    UA_EXPANDEDNODEID_NUMERIC(0, UA_NS0ID_ACKNOWLEDGEABLECONDITIONTYPE_CONFIRM), true);
-
-    retval |= setAckedState(server, condition, UA_FALSE);
-    retval |= setConfirmedState(server, condition, UA_FALSE);
+                                    UA_EXPANDEDNODEID_NUMERIC(0, UA_NS0ID_ACKNOWLEDGEABLECONDITIONTYPE_CONFIRM), true);*/
 
     return retval;
 }
@@ -772,7 +905,7 @@ refresh(UA_Server *server, UA_MonitoredItem *monItem) {
 
     struct EventsEntry *ee = NULL;
     struct Events* events = ((struct Events*)server->aacCtx);
-    SLIST_FOREACH(ee, &events->list, listEntry) {
+    LIST_FOREACH(ee, &events->list, listEntry) {
         UA_Event_addEventToMonitoredItem(server, &ee->conditionId, monItem);
     }
 
@@ -833,10 +966,10 @@ acknowledgeCallback(UA_Server *server, const UA_NodeId *sessionId,
                      const UA_Variant *input, size_t outputSize,
                      UA_Variant *output) {
     UA_ByteString *eventId = (UA_ByteString*)input[0].data;
-    //UA_LocalizedText *comment = (UA_LocalizedText*)input[1].data;
-    struct EventsEntry *ee = NULL;
+    UA_LocalizedText *comment = (UA_LocalizedText*)input[1].data;
+    struct EventsEntry *ee = NULL, *ee_tmp = NULL;
     struct Events* events = ((struct Events*)server->aacCtx);
-    SLIST_FOREACH(ee, &events->list, listEntry) {
+    LIST_FOREACH_SAFE(ee, &events->list, listEntry, ee_tmp) {
         if(UA_ByteString_equal(&ee->eventId, eventId)){
             UA_Boolean isAcked;
             UA_StatusCode retval = getAckedState(server, ee->conditionId, &isAcked);
@@ -844,10 +977,15 @@ acknowledgeCallback(UA_Server *server, const UA_NodeId *sessionId,
                 return UA_STATUSCODE_BADMETHODINVALID;
             if(isAcked)
                 return UA_STATUSCODE_BADCONDITIONBRANCHALREADYACKED;
+            setComment(server, ee->conditionId, *comment);
             setAckedState(server, ee->conditionId, true);
+            setRetain(server, ee->conditionId, false);
             UA_NodeId *source;
             UA_Server_getNodeContext(server, ee->conditionId, (void**)&source);
             retval |= UA_Server_triggerEvent(server, ee->conditionId, *source, NULL, UA_FALSE);
+            UA_Server_deleteNode(server, ee->conditionId, false);
+            LIST_REMOVE(ee, listEntry);
+            EventsEntry_delete(ee);
             return UA_STATUSCODE_GOOD;
         }
     }
@@ -863,13 +1001,15 @@ __UA_Server_setConditionRefreshMethods(UA_Server *server) {
         UA_NODEID_NUMERIC(0, UA_NS0ID_CONDITIONTYPE_CONDITIONREFRESH2), refresh2MethodCallback);
     retval |= UA_Server_setMethodNode_callback(server,
         UA_NODEID_NUMERIC(0, UA_NS0ID_ACKNOWLEDGEABLECONDITIONTYPE_ACKNOWLEDGE), acknowledgeCallback);
+    retval |= setEnableMethod(server);
+    retval |= setDisableMethod(server);
     return retval;
 }
 
 static UA_StatusCode
 __UA_Server_enableAlarmsAndConditions(UA_Server *server) {
     struct Events *e = (struct Events*)UA_malloc(sizeof(struct Events));
-    SLIST_INIT(&e->list);
+    LIST_INIT(&e->list);
     server->aacCtx = e;
     
     makeRefreshEventsConcrete(server);
