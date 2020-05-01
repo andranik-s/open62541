@@ -284,6 +284,12 @@ getParentTypeAndInterfaceHierarchy(UA_Server *server, const UA_NodeId *typeNode,
 UA_StatusCode UA_EXPORT
 UA_getConditionId(UA_Server *server, const UA_NodeId *conditionNodeId, UA_NodeId *outConditionId);
 
+UA_StatusCode
+UA_Server_initAlarmsAndConditions(UA_Server *server);
+
+void
+UA_Server_deinitAlarmsAndConditions(UA_Server *server);
+
 #endif
 
 #ifdef UA_ENABLE_SUBSCRIPTIONS_ALARMS_CONDITIONS
