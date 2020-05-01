@@ -28,19 +28,28 @@
 #define UA_ACTIVE_TXT UA_LOCALIZEDTEXT(LOCALE, (char*)"Active")
 #define UA_NACTIVE_TXT UA_LOCALIZEDTEXT(LOCALE, (char*)"Inactive")
 
+typedef struct {
+    UA_NodeId sourceCondition;
+} BranchContext;
 struct EventsEntry {
     LIST_ENTRY(EventsEntry) listEntry;
     UA_ByteString eventId;
     UA_NodeId conditionId;
 };
 
-static void EventsEntry_clear(struct EventsEntry *ee) {
+static void EventsEntry_clear(UA_Server *server, struct EventsEntry *ee) {
+    BranchContext *ctx;
+    UA_StatusCode retval = UA_Server_getNodeContext(server, ee->conditionId, (void**)&ctx);
+    if(!retval) {
+        UA_NodeId_clear(&ctx->sourceCondition);
+        UA_free(ctx);
+    }
     UA_ByteString_clear(&ee->eventId);
     UA_NodeId_clear(&ee->conditionId);
 }
 
-static void EventsEntry_delete(struct EventsEntry *ee) {
-    EventsEntry_clear(ee);
+static void EventsEntry_delete(UA_Server *server, struct EventsEntry *ee) {
+    EventsEntry_clear(server, ee);
     free(ee);
 }
 
@@ -111,9 +120,6 @@ deepCopyNode(UA_Server *server, const UA_NodeId source, UA_NodeId *dest) {
     nodeCopy->nodeId = UA_NODEID_NULL;
     retval = UA_NODESTORE_INSERT(server, nodeCopy, dest);
     retval = copyNodeChildren(server, &server->adminSession, &source, dest);
-    UA_NodeId *sourceIdForCtx = UA_NodeId_new();
-    UA_NodeId_copy(&source, sourceIdForCtx);
-    UA_Server_setNodeContext(server, *dest, sourceIdForCtx); //TODO: clear context
 
 /*
     UA_Server_addReference(server, UA_NODEID_NUMERIC(0, UA_NS0ID_OBJECTSFOLDER), UA_NODEID_NUMERIC(0, UA_NS0ID_HASCOMPONENT),
@@ -229,9 +235,9 @@ UA_getConditionId(UA_Server *server, const UA_NodeId *conditionNodeId, UA_NodeId
     struct Events* events = ((struct Events*)server->aacCtx);
     LIST_FOREACH(ee, &events->list, listEntry) {
         if(UA_NodeId_equal(&ee->conditionId, conditionNodeId)){
-            UA_NodeId *source;
-            UA_Server_getNodeContext(server, ee->conditionId, (void**)&source);
-            UA_NodeId_copy(source, outConditionId);
+            BranchContext *ctx;
+            UA_Server_getNodeContext(server, ee->conditionId, (void**)&ctx);
+            UA_NodeId_copy(&ctx->sourceCondition, outConditionId);
 
             return UA_STATUSCODE_GOOD;
         }
@@ -640,6 +646,9 @@ createBranch(UA_Server *server, const UA_NodeId conditionId, UA_NodeId *branchId
     retval |= write_UA_NodeId(server, *branchId, UA_QUALIFIEDNAME(0, "BranchId"), UA_NODEID_NUMERIC(11, bn++));
     retval |= setAckedState(server, *branchId, UA_FALSE);
     //retval |= setConfirmedState(server, condition, UA_FALSE);
+    BranchContext *ctx = (BranchContext*)UA_calloc(sizeof(BranchContext), 1);
+    UA_NodeId_copy(&conditionId, &ctx->sourceCondition);
+    retval |= UA_Server_setNodeContext(server, *branchId, ctx);
     return retval;
 }
 
@@ -985,9 +994,12 @@ acknowledgeCallback(UA_Server *server, const UA_NodeId *sessionId,
             UA_NodeId *source;
             UA_Server_getNodeContext(server, ee->conditionId, (void**)&source);
             retval |= UA_Server_triggerEvent(server, ee->conditionId, *source, NULL, UA_FALSE);
-            UA_Server_deleteNode(server, ee->conditionId, false);
             LIST_REMOVE(ee, listEntry);
-            EventsEntry_delete(ee);
+            UA_NodeId conditionId;
+            UA_NodeId_copy(&ee->conditionId, &conditionId);
+            EventsEntry_delete(server, ee);
+            UA_Server_deleteNode(server, conditionId, false);
+            UA_NodeId_clear(&conditionId);
             return UA_STATUSCODE_GOOD;
         }
     }
@@ -1008,8 +1020,8 @@ __UA_Server_setConditionRefreshMethods(UA_Server *server) {
     return retval;
 }
 
-static UA_StatusCode
-__UA_Server_enableAlarmsAndConditions(UA_Server *server) {
+UA_StatusCode
+UA_Server_initAlarmsAndConditions(UA_Server *server) {
     struct Events *e = (struct Events*)UA_malloc(sizeof(struct Events));
     LIST_INIT(&e->list);
     server->aacCtx = e;
@@ -1018,16 +1030,20 @@ __UA_Server_enableAlarmsAndConditions(UA_Server *server) {
     return __UA_Server_setConditionRefreshMethods(server);
 }
 
+void
+UA_Server_deinitAlarmsAndConditions(UA_Server *server) {
+    struct EventsEntry *ee = NULL, *ee_tmp = NULL;
+    struct Events* events = ((struct Events*)server->aacCtx);
+    LIST_FOREACH_SAFE(ee, &events->list, listEntry, ee_tmp) {
+        LIST_REMOVE(ee, listEntry);
+        EventsEntry_delete(server, ee);
+    }
+    free(events);
+}
+
 UA_StatusCode
 UA_Server_initCondtion(UA_Server *server, const UA_NodeId condition, const UA_NodeId conditionSource) {
     UA_StatusCode statusCode = UA_STATUSCODE_GOOD;
-
-    if(server->aacCtx == NULL){
-        UA_StatusCode sc = __UA_Server_enableAlarmsAndConditions(server);
-        if(sc != UA_STATUSCODE_GOOD)
-            return sc;
-    }
-
     UA_NodeId eventTypeId;
     getNodeType_(server, condition, &eventTypeId);
     if(isConditionType(server, eventTypeId)) {

@@ -196,6 +196,10 @@ void UA_Server_delete(UA_Server *server) {
 
 #endif
 
+#ifdef UA_ENABLE_CUSTOM_ALARMS_CONDITIONS
+    UA_Server_deinitAlarmsAndConditions(server);
+#endif
+
 #ifdef UA_ENABLE_PUBSUB
     UA_PubSubManager_delete(server, &server->pubSubManager);
 #endif
@@ -320,6 +324,12 @@ UA_Server_init(UA_Server *server) {
     /* Build PubSub information model */
 #ifdef UA_ENABLE_PUBSUB_INFORMATIONMODEL
     UA_Server_initPubSubNS0(server);
+#endif
+
+#ifdef UA_ENABLE_CUSTOM_ALARMS_CONDITIONS
+    res = UA_Server_initAlarmsAndConditions(server);
+    if(res != UA_STATUSCODE_GOOD)
+        goto cleanup;
 #endif
 
     return server;
