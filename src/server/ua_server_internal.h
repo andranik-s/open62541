@@ -401,6 +401,25 @@ writeObjectProperty(UA_Server *server, const UA_NodeId objectId,
 UA_StatusCode
 getNodeContext(UA_Server *server, UA_NodeId nodeId, void **nodeContext);
 
+UA_StatusCode
+setNodeContext(UA_Server *server, UA_NodeId nodeId, void *nodeContext);
+
+UA_StatusCode
+setVariableNode_valueCallback(UA_Server *server,
+                              const UA_NodeId nodeId,
+                              const UA_ValueCallback callback);
+
+UA_StatusCode
+addReference(UA_Server *server, const UA_NodeId sourceId,
+             const UA_NodeId refTypeId,
+             const UA_ExpandedNodeId targetId,
+             UA_Boolean isForward);
+
+UA_StatusCode
+triggerEvent(UA_Server *server, const UA_NodeId eventNodeId,
+             const UA_NodeId origin, UA_ByteString *outEventId,
+             const UA_Boolean deleteEventNode);
+
 void
 removeCallback(UA_Server *server, UA_UInt64 callbackId);
 
