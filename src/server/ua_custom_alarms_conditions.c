@@ -1030,8 +1030,8 @@ UA_Server_deinitAlarmsAndConditions(UA_Server *server) {
         LIST_REMOVE(ee, listEntry);
         EventsEntry_delete(server, ee);
     }
-    deleteNode(server, aacCtx->refreshStartEventNodeId, UA_TRUE);
-    deleteNode(server, aacCtx->refreshEndEventNodeId, UA_TRUE);
+    UA_Server_deleteNode(server, aacCtx->refreshStartEventNodeId, UA_TRUE);
+    UA_Server_deleteNode(server, aacCtx->refreshEndEventNodeId, UA_TRUE);
     free(aacCtx);
 }
 
