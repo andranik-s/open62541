@@ -1361,7 +1361,7 @@ UA_Server_triggerEvent(UA_Server *server, const UA_NodeId eventNodeId, const UA_
 
 #ifdef UA_ENABLE_CUSTOM_ALARMS_CONDITIONS
 
-UA_StatusCode UA_EXPORT
+UA_StatusCode UA_EXPORT UA_THREADSAFE
 UA_Server_initCondtion(UA_Server *server, const UA_NodeId condition, const UA_NodeId conditionSource);
 
 #endif

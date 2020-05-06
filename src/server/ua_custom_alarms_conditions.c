@@ -39,7 +39,7 @@ struct EventsEntry {
 
 static void EventsEntry_clear(UA_Server *server, struct EventsEntry *ee) {
     BranchContext *ctx;
-    UA_StatusCode retval = UA_Server_getNodeContext(server, ee->conditionId, (void**)&ctx);
+    UA_StatusCode retval = getNodeContext(server, ee->conditionId, (void**)&ctx);
     if(!retval) {
         UA_NodeId_clear(&ctx->sourceCondition);
         UA_free(ctx);
@@ -53,9 +53,11 @@ static void EventsEntry_delete(UA_Server *server, struct EventsEntry *ee) {
     free(ee);
 }
 
-struct Events {
-    LIST_HEAD(, EventsEntry) list;
-};
+typedef struct {
+    LIST_HEAD(, EventsEntry) eventsList;
+    UA_NodeId refreshStartEventNodeId;
+    UA_NodeId refreshEndEventNodeId;
+} AAC_Context;
 
 static void
 deleteReferencesSubset(UA_Node *node, size_t referencesDeleteSize,
@@ -121,12 +123,6 @@ deepCopyNode(UA_Server *server, const UA_NodeId source, UA_NodeId *dest) {
     retval = UA_NODESTORE_INSERT(server, nodeCopy, dest);
     retval = copyNodeChildren(server, &server->adminSession, &source, dest);
 
-/*
-    UA_Server_addReference(server, UA_NODEID_NUMERIC(0, UA_NS0ID_OBJECTSFOLDER), UA_NODEID_NUMERIC(0, UA_NS0ID_HASCOMPONENT),
-                           UA_EXPANDEDNODEID_NUMERIC(dest->namespaceIndex, dest->identifier.numeric), true);
-    UA_Server_addReference(server, UA_NODEID_NUMERIC(0, UA_NS0ID_OBJECTSFOLDER), UA_NODEID_NUMERIC(0, UA_NS0ID_HASCOMPONENT),
-                           UA_EXPANDEDNODEID_NUMERIC(dest->namespaceIndex, dest->identifier.numeric), true);*/
-
     return retval;
 }
 
@@ -141,9 +137,9 @@ deepCopyNode(UA_Server *server, const UA_NodeId source, UA_NodeId *dest) {
 DEFINE_WRITE_SCALAR_PROPERTY_FUNCTION(UA_Boolean, UA_TYPES_BOOLEAN)
 DEFINE_WRITE_SCALAR_PROPERTY_FUNCTION(UA_DateTime, UA_TYPES_DATETIME)
 DEFINE_WRITE_SCALAR_PROPERTY_FUNCTION(UA_UInt16, UA_TYPES_UINT16)
-DEFINE_WRITE_SCALAR_PROPERTY_FUNCTION(UA_LocalizedText, UA_TYPES_LOCALIZEDTEXT)
+//DEFINE_WRITE_SCALAR_PROPERTY_FUNCTION(UA_LocalizedText, UA_TYPES_LOCALIZEDTEXT)
 DEFINE_WRITE_SCALAR_PROPERTY_FUNCTION(UA_NodeId, UA_TYPES_NODEID)
-DEFINE_WRITE_SCALAR_PROPERTY_FUNCTION(UA_String, UA_TYPES_STRING)
+//DEFINE_WRITE_SCALAR_PROPERTY_FUNCTION(UA_String, UA_TYPES_STRING)
 
 #define DEFINE_READ_SCALAR_PROPERTY_FUNCTION(ctype, uatype)                              \
     static UA_StatusCode read_##ctype(UA_Server *server, UA_NodeId obj,                  \
@@ -232,11 +228,11 @@ UA_getConditionId(UA_Server *server, const UA_NodeId *conditionNodeId, UA_NodeId
     }
 
     struct EventsEntry *ee = NULL;
-    struct Events* events = ((struct Events*)server->aacCtx);
-    LIST_FOREACH(ee, &events->list, listEntry) {
+    AAC_Context* aacCtx = ((AAC_Context*)server->aacCtx);
+    LIST_FOREACH(ee, &aacCtx->eventsList, listEntry) {
         if(UA_NodeId_equal(&ee->conditionId, conditionNodeId)){
             BranchContext *ctx;
-            UA_Server_getNodeContext(server, ee->conditionId, (void**)&ctx);
+            getNodeContext(server, ee->conditionId, (void**)&ctx);
             UA_NodeId_copy(&ctx->sourceCondition, outConditionId);
 
             return UA_STATUSCODE_GOOD;
@@ -252,7 +248,7 @@ setConditionVariable(UA_Server *server, const UA_NodeId condition, const UA_Qual
     UA_NodeId varNodeId = UA_NODEID_NULL;
 
     {
-        UA_BrowsePathResult bpr = UA_Server_browseSimplifiedBrowsePath(server, condition, 1, &variable);
+        UA_BrowsePathResult bpr = browseSimplifiedBrowsePath(server, condition, 1, &variable);
         if(bpr.statusCode != UA_STATUSCODE_GOOD)
             return bpr.statusCode;
 
@@ -260,7 +256,8 @@ setConditionVariable(UA_Server *server, const UA_NodeId condition, const UA_Qual
         UA_BrowsePathResult_deleteMembers(&bpr);
     }
 
-    retval |= UA_Server_writeValue(server, varNodeId, value);
+    retval |= writeWithWriteValue(server, &varNodeId, UA_ATTRIBUTEID_VALUE,
+                                  &UA_TYPES[UA_TYPES_VARIANT], &value);
     retval |= write_UA_DateTime(server, varNodeId, UA_CONDVAR_SOURCETIMESTAMP, UA_DateTime_now());
 
     return retval;
@@ -273,7 +270,7 @@ setTwoStateVariable(UA_Server *server, const UA_NodeId condition,
     UA_NodeId varNodeId = UA_NODEID_NULL;
 
     {
-        UA_BrowsePathResult bpr = UA_Server_browseSimplifiedBrowsePath(server, condition, 1, &variable);
+        UA_BrowsePathResult bpr = browseSimplifiedBrowsePath(server, condition, 1, &variable);
         if(bpr.statusCode != UA_STATUSCODE_GOOD)
             return bpr.statusCode;
 
@@ -284,7 +281,8 @@ setTwoStateVariable(UA_Server *server, const UA_NodeId condition,
     UA_Variant vtext_;
     UA_Variant_setScalar(&vtext_, &text, &UA_TYPES[UA_TYPES_LOCALIZEDTEXT]);
 
-    retval |= UA_Server_writeValue(server, varNodeId, vtext_);
+    retval |= writeWithWriteValue(server, &varNodeId, UA_ATTRIBUTEID_VALUE,
+                                  &UA_TYPES[UA_TYPES_VARIANT], &vtext_);
     retval |= write_UA_Boolean(server, varNodeId, UA_TWOSTATE_ID, id);
 
     return retval;
@@ -297,7 +295,7 @@ getTwoStateVariableId(UA_Server *server, const UA_NodeId condition,
     UA_NodeId varNodeId = UA_NODEID_NULL;
 
     {
-        UA_BrowsePathResult bpr = UA_Server_browseSimplifiedBrowsePath(server, condition, 1, &variable);
+        UA_BrowsePathResult bpr = browseSimplifiedBrowsePath(server, condition, 1, &variable);
         if(bpr.statusCode != UA_STATUSCODE_GOOD)
             return bpr.statusCode;
 
@@ -306,7 +304,7 @@ getTwoStateVariableId(UA_Server *server, const UA_NodeId condition,
     }
 
     UA_Variant v;
-    retval = UA_Server_readObjectProperty(server, varNodeId, UA_TWOSTATE_ID, &v);
+    retval = readObjectProperty(server, varNodeId, UA_TWOSTATE_ID, &v);
     if(retval == UA_STATUSCODE_GOOD) {
         *id = *(UA_Boolean*)v.data;
         UA_Variant_clear(&v);
@@ -395,7 +393,7 @@ setSeverity(UA_Server *server, const UA_NodeId condition, UA_UInt16 severity) {
     UA_StatusCode retval = UA_STATUSCODE_GOOD;
 
     UA_Variant v;
-    retval |= UA_Server_readObjectProperty(server, condition, UA_CONDITION_SEVERITY, &v);
+    retval |= readObjectProperty(server, condition, UA_CONDITION_SEVERITY, &v);
     if(retval != UA_STATUSCODE_GOOD)
         return retval;
     if(!UA_Variant_isEmpty(&v) && v.type->typeIndex == UA_TYPES_UINT16) {
@@ -422,7 +420,7 @@ setAckedState(UA_Server *server, const UA_NodeId condition, UA_Boolean bool) {
     return set
 }*/
 
-static UA_StatusCode
+/*static UA_StatusCode
 __initBaseEvent(UA_Server *server, const UA_NodeId event, UA_LocalizedText message) {
     return write_UA_LocalizedText(server, event, UA_QUALIFIEDNAME(0, "Message"), message);
 }
@@ -442,9 +440,9 @@ __initAuditEvent(UA_Server *server, const UA_NodeId event,
     retval |= write_UA_Boolean(server, event, UA_QUALIFIEDNAME(0, "Status"), status_);
 
     return retval;
-}
+}*/
 
-static UA_StatusCode
+/*static UA_StatusCode
 __initAuditUpdateMethodEvent(UA_Server *server, const UA_NodeId event, 
                  UA_LocalizedText message,
                  UA_Boolean status_, const UA_String clientAuditEntryId,
@@ -456,15 +454,13 @@ __initAuditUpdateMethodEvent(UA_Server *server, const UA_NodeId event,
     retval |= __initAuditEvent(server, event, message, status_, clientAuditEntryId, clientUserId, serverId);
     retval |= write_UA_NodeId(server, event, UA_QUALIFIEDNAME(0, "MethodId"), methodId);
 
-    /* TODO: write input */
-
     return retval;
-}
+}*/
 
 /*static UA_StatusCode
 getChildId(UA_Server *server, const UA_NodeId obj, UA_QualifiedName subObjName, UA_NodeId *outId) {
     UA_BrowsePathResult bpr =
-        UA_Server_browseSimplifiedBrowsePath(server, obj, 1, &subObjName);
+        browseSimplifiedBrowsePath(server, obj, 1, &subObjName);
     if(bpr.statusCode != UA_STATUSCODE_GOOD)
         return bpr.statusCode;
 
@@ -474,7 +470,7 @@ getChildId(UA_Server *server, const UA_NodeId obj, UA_QualifiedName subObjName, 
     return UA_STATUSCODE_GOOD;
 }*/
 
-static UA_StatusCode
+/*static UA_StatusCode
 __concatenateLocalizedTexsts(UA_LocalizedText *out, const size_t n, ...) {
     UA_LocalizedText_init(out);
 
@@ -514,9 +510,9 @@ __concatenateLocalizedTexsts(UA_LocalizedText *out, const size_t n, ...) {
     va_end(stringList);
 
     return UA_STATUSCODE_GOOD;
-}
+}*/
 
-static UA_StatusCode
+/*static UA_StatusCode
 triggerConditionEnableAuditEvent(UA_Server *server, const UA_NodeId condition, UA_Boolean enable, 
                             UA_Boolean status_, 
                             const UA_NodeId *sessionId, const UA_Variant *input, size_t inputSize) {
@@ -546,90 +542,90 @@ triggerConditionEnableAuditEvent(UA_Server *server, const UA_NodeId condition, U
     UA_LocalizedText_deleteMembers(&msg);
 
     return retval;
-}
+}*/
 
 /* We use a 16-Byte ByteString as an identifier */
-// static UA_StatusCode
-// generateEventId(UA_ByteString *generatedId) {
-//     generatedId->data = (UA_Byte *) UA_malloc(16 * sizeof(UA_Byte));
-//     if(!generatedId->data)
-//         return UA_STATUSCODE_BADOUTOFMEMORY;
-//     generatedId->length = 16;
+static UA_StatusCode
+generateEventId(UA_ByteString *generatedId) {
+    generatedId->data = (UA_Byte *) UA_malloc(16 * sizeof(UA_Byte));
+    if(!generatedId->data)
+        return UA_STATUSCODE_BADOUTOFMEMORY;
+    generatedId->length = 16;
 
-//     UA_UInt32 *ids = (UA_UInt32*)generatedId->data;
-//     ids[0] = UA_UInt32_random();
-//     ids[1] = UA_UInt32_random();
-//     ids[2] = UA_UInt32_random();
-//     ids[3] = UA_UInt32_random();
-//     return UA_STATUSCODE_GOOD;
-// }
+    UA_UInt32 *ids = (UA_UInt32*)generatedId->data;
+    ids[0] = UA_UInt32_random();
+    ids[1] = UA_UInt32_random();
+    ids[2] = UA_UInt32_random();
+    ids[3] = UA_UInt32_random();
+    return UA_STATUSCODE_GOOD;
+}
 
-// static UA_StatusCode
-// eventSetStandardFields(UA_Server *server, const UA_NodeId *event,
-//                        const UA_NodeId *origin, UA_ByteString *outEventId) {
-//     /* Set the SourceNode */
-//     UA_StatusCode retval;
-//     UA_QualifiedName name = UA_QUALIFIEDNAME(0, "SourceNode");
-//     UA_BrowsePathResult bpr = browseSimplifiedBrowsePath(server, *event, 1, &name);
-//     if(bpr.statusCode != UA_STATUSCODE_GOOD || bpr.targetsSize < 1) {
-//         retval = bpr.statusCode;
-//         UA_BrowsePathResult_deleteMembers(&bpr);
-//         return retval;
-//     }
-//     UA_Variant value;
-//     UA_Variant_init(&value);
-//     UA_Variant_setScalarCopy(&value, origin, &UA_TYPES[UA_TYPES_NODEID]);
-//     retval = writeWithWriteValue(server, &bpr.targets[0].targetId.nodeId, UA_ATTRIBUTEID_VALUE, &UA_TYPES[UA_TYPES_VARIANT], &value);
-//     UA_Variant_deleteMembers(&value);
-//     UA_BrowsePathResult_deleteMembers(&bpr);
-//     if(retval != UA_STATUSCODE_GOOD)
-//         return retval;
+static UA_StatusCode
+eventSetStandardFields(UA_Server *server, const UA_NodeId *event,
+                       const UA_NodeId *origin, UA_ByteString *outEventId) {
+    /* Set the SourceNode */
+    UA_StatusCode retval;
+    UA_QualifiedName name = UA_QUALIFIEDNAME(0, "SourceNode");
+    UA_BrowsePathResult bpr = browseSimplifiedBrowsePath(server, *event, 1, &name);
+    if(bpr.statusCode != UA_STATUSCODE_GOOD || bpr.targetsSize < 1) {
+        retval = bpr.statusCode;
+        UA_BrowsePathResult_deleteMembers(&bpr);
+        return retval;
+    }
+    UA_Variant value;
+    UA_Variant_init(&value);
+    UA_Variant_setScalarCopy(&value, origin, &UA_TYPES[UA_TYPES_NODEID]);
+    retval = writeWithWriteValue(server, &bpr.targets[0].targetId.nodeId, UA_ATTRIBUTEID_VALUE, &UA_TYPES[UA_TYPES_VARIANT], &value);
+    UA_Variant_deleteMembers(&value);
+    UA_BrowsePathResult_deleteMembers(&bpr);
+    if(retval != UA_STATUSCODE_GOOD)
+        return retval;
 
-//     /* Set the ReceiveTime */
-//     name = UA_QUALIFIEDNAME(0, "ReceiveTime");
-//     bpr = browseSimplifiedBrowsePath(server, *event, 1, &name);
-//     if(bpr.statusCode != UA_STATUSCODE_GOOD || bpr.targetsSize < 1) {
-//         retval = bpr.statusCode;
-//         UA_BrowsePathResult_deleteMembers(&bpr);
-//         return retval;
-//     }
-//     UA_DateTime rcvTime = UA_DateTime_now();
-//     UA_Variant_setScalar(&value, &rcvTime, &UA_TYPES[UA_TYPES_DATETIME]);
-//     retval = writeWithWriteValue(server, &bpr.targets[0].targetId.nodeId, UA_ATTRIBUTEID_VALUE, &UA_TYPES[UA_TYPES_VARIANT], &value);
-//     UA_BrowsePathResult_deleteMembers(&bpr);
-//     if(retval != UA_STATUSCODE_GOOD)
-//         return retval;
+    /* Set the ReceiveTime */
+    name = UA_QUALIFIEDNAME(0, "ReceiveTime");
+    bpr = browseSimplifiedBrowsePath(server, *event, 1, &name);
+    if(bpr.statusCode != UA_STATUSCODE_GOOD || bpr.targetsSize < 1) {
+        retval = bpr.statusCode;
+        UA_BrowsePathResult_deleteMembers(&bpr);
+        return retval;
+    }
+    UA_DateTime rcvTime = UA_DateTime_now();
+    UA_Variant_setScalar(&value, &rcvTime, &UA_TYPES[UA_TYPES_DATETIME]);
+    retval = writeWithWriteValue(server, &bpr.targets[0].targetId.nodeId, UA_ATTRIBUTEID_VALUE, &UA_TYPES[UA_TYPES_VARIANT], &value);
+    UA_BrowsePathResult_deleteMembers(&bpr);
+    if(retval != UA_STATUSCODE_GOOD)
+        return retval;
 
-//     /* Set the EventId */
-//     UA_ByteString eventId = UA_BYTESTRING_NULL;
-//     retval = generateEventId(&eventId);
-//     if(retval != UA_STATUSCODE_GOOD)
-//         return retval;
-//     name = UA_QUALIFIEDNAME(0, "EventId");
-//     bpr = browseSimplifiedBrowsePath(server, *event, 1, &name);
-//     if(bpr.statusCode != UA_STATUSCODE_GOOD || bpr.targetsSize < 1) {
-//         retval = bpr.statusCode;
-//         UA_ByteString_deleteMembers(&eventId);
-//         UA_BrowsePathResult_deleteMembers(&bpr);
-//         return retval;
-//     }
-//     UA_Variant_init(&value);
-//     UA_Variant_setScalar(&value, &eventId, &UA_TYPES[UA_TYPES_BYTESTRING]);
-//     retval = writeWithWriteValue(server, &bpr.targets[0].targetId.nodeId, UA_ATTRIBUTEID_VALUE, &UA_TYPES[UA_TYPES_VARIANT], &value);
-//     UA_BrowsePathResult_deleteMembers(&bpr);
-//     if(retval != UA_STATUSCODE_GOOD) {
-//         UA_ByteString_deleteMembers(&eventId);
-//         return retval;
-//     }
+    /* Set the EventId */
+    UA_ByteString eventId = UA_BYTESTRING_NULL;
+    retval = generateEventId(&eventId);
+    if(retval != UA_STATUSCODE_GOOD)
+        return retval;
+    name = UA_QUALIFIEDNAME(0, "EventId");
+    bpr = browseSimplifiedBrowsePath(server, *event, 1, &name);
+    if(bpr.statusCode != UA_STATUSCODE_GOOD || bpr.targetsSize < 1) {
+        retval = bpr.statusCode;
+        UA_ByteString_deleteMembers(&eventId);
+        UA_BrowsePathResult_deleteMembers(&bpr);
+        return retval;
+    }
+    UA_Variant_init(&value);
+    UA_Variant_setScalar(&value, &eventId, &UA_TYPES[UA_TYPES_BYTESTRING]);
+    retval = writeWithWriteValue(server, &bpr.targets[0].targetId.nodeId, UA_ATTRIBUTEID_VALUE, &UA_TYPES[UA_TYPES_VARIANT], &value);
+    UA_BrowsePathResult_deleteMembers(&bpr);
+    if(retval != UA_STATUSCODE_GOOD) {
+        UA_ByteString_deleteMembers(&eventId);
+        return retval;
+    }
 
-//     /* Return the EventId */
-//     if(outEventId)
-//         *outEventId = eventId;
-//     else
-//         UA_ByteString_deleteMembers(&eventId);
+    /* Return the EventId */
+    if(outEventId)
+        *outEventId = eventId;
+    else
+        UA_ByteString_deleteMembers(&eventId);
 
-//     return UA_STATUSCODE_GOOD;
-// }
+    return UA_STATUSCODE_GOOD;
+}
 
 static UA_StatusCode
 initEvent(UA_Server *server, const UA_NodeId eventId) {
@@ -648,7 +644,7 @@ createBranch(UA_Server *server, const UA_NodeId conditionId, UA_NodeId *branchId
     //retval |= setConfirmedState(server, condition, UA_FALSE);
     BranchContext *ctx = (BranchContext*)UA_calloc(sizeof(BranchContext), 1);
     UA_NodeId_copy(&conditionId, &ctx->sourceCondition);
-    retval |= UA_Server_setNodeContext(server, *branchId, ctx);
+    retval |= setNodeContext(server, *branchId, ctx);
     return retval;
 }
 
@@ -656,7 +652,7 @@ static UA_StatusCode
 triggerCondition(UA_Server *server, const UA_NodeId conditionId, const UA_NodeId originId) {
     UA_StatusCode retval = UA_STATUSCODE_GOOD;
 
-    struct Events* events = ((struct Events*)server->aacCtx);
+    AAC_Context* aacCtx = ((AAC_Context*)server->aacCtx);
     struct EventsEntry *entry = (struct EventsEntry *)UA_malloc(sizeof(struct EventsEntry));
 
     UA_NodeId conditionType;
@@ -667,16 +663,9 @@ triggerCondition(UA_Server *server, const UA_NodeId conditionId, const UA_NodeId
         UA_NodeId_copy(&conditionId, &entry->conditionId);
     }
 
-    /*retval |= setTime(server, entry->conditionId, UA_DateTime_now());
-    retval |= eventSetStandardFields(server, &entry->conditionId, &conditionId, &entry->eventId);
-
-    LIST_INSERT_HEAD(&events->list, entry, listEntry);
-
-    retval |= UA_Server_triggerEvent2(server, entry->conditionId, conditionId, &entry->eventId, UA_FALSE);*/
-
     initEvent(server, entry->conditionId);
-    LIST_INSERT_HEAD(&events->list, entry, listEntry);
-    retval |= UA_Server_triggerEvent(server, entry->conditionId, conditionId, &entry->eventId, UA_FALSE);
+    LIST_INSERT_HEAD(&aacCtx->eventsList, entry, listEntry);
+    retval |= triggerEvent(server, entry->conditionId, conditionId, &entry->eventId, UA_FALSE);
 
     return retval;
 }
@@ -688,24 +677,24 @@ enableMethodCallback(UA_Server *server, const UA_NodeId *sessionId,
                      void *objectContext, size_t inputSize,
                      const UA_Variant *input, size_t outputSize,
                      UA_Variant *output) {
-    if(isConditionType(server, *objectId))
+    UA_LOCK(server->serviceMutex);
+    if(isConditionType(server, *objectId)) {
+        UA_UNLOCK(server->serviceMutex);
         return UA_STATUSCODE_BADINVALIDARGUMENT;
-    
+    }
     UA_StatusCode retval = UA_STATUSCODE_GOOD;
     UA_Boolean isEnabled;
     retval = getEnabledState(server, *objectId, &isEnabled);
     if(retval == UA_STATUSCODE_GOOD) {
-        if(!isEnabled)
+        if(!isEnabled) {
             retval = setEnabledState(server, *objectId, UA_TRUE);
-        else
+            if(retval == UA_STATUSCODE_GOOD)
+                retval = triggerCondition(server, *objectId, *objectId);
+        } else {
             retval = UA_STATUSCODE_BADCONDITIONALREADYENABLED;
+        }
     }
-    
-    triggerConditionEnableAuditEvent(server, *objectId, UA_TRUE, retval == UA_STATUSCODE_GOOD,
-        sessionId, input, inputSize);
-
-    triggerCondition(server, *objectId, *objectId);
-
+    UA_UNLOCK(server->serviceMutex);
     return retval;
 }
 
@@ -716,41 +705,31 @@ disableMethodCallback(UA_Server *server, const UA_NodeId *sessionId,
                      void *objectContext, size_t inputSize,
                      const UA_Variant *input, size_t outputSize,
                      UA_Variant *output) {
-    if(isConditionType(server, *objectId))
+    UA_LOCK(server->serviceMutex);
+    if(isConditionType(server, *objectId)) {
+        UA_UNLOCK(server->serviceMutex);
         return UA_STATUSCODE_BADINVALIDARGUMENT;
-
+    }
     UA_StatusCode retval = UA_STATUSCODE_GOOD;
     UA_Boolean isEnabled;
     retval = getEnabledState(server, *objectId, &isEnabled);
     if(retval == UA_STATUSCODE_GOOD) {
-        if(isEnabled)
+        if(isEnabled) {
             retval = setEnabledState(server, *objectId, UA_FALSE);
-        else
+            if(retval == UA_STATUSCODE_GOOD)
+                retval = triggerCondition(server, *objectId, *objectId);
+        } else {
             retval = UA_STATUSCODE_BADCONDITIONALREADYDISABLED;
+        }
     }
-    
-    triggerConditionEnableAuditEvent(server, *objectId, UA_FALSE, retval == UA_STATUSCODE_GOOD,
-        sessionId, input, inputSize);
-
-    triggerCondition(server, *objectId, *objectId);
-        
+    UA_UNLOCK(server->serviceMutex);
     return retval;
 }
 
 static UA_StatusCode
-setEnableMethod(UA_Server *server) {
-    return UA_Server_setMethodNode_callback(server, UA_NODEID_NUMERIC(0, UA_NS0ID_CONDITIONTYPE_ENABLE), enableMethodCallback);
-}
-
-static UA_StatusCode
-setDisableMethod(UA_Server *server) {
-    return UA_Server_setMethodNode_callback(server, UA_NODEID_NUMERIC(0, UA_NS0ID_CONDITIONTYPE_DISABLE), disableMethodCallback);
-}
-
-static UA_StatusCode
 addHasConditionRefence(UA_Server *server, const UA_NodeId condition, const UA_NodeId conditionSource) {
-    return UA_Server_addReference(server, conditionSource, UA_NODEID_NUMERIC(0, UA_NS0ID_HASCONDITION),
-                                  UA_EXPANDEDNODEID_NUMERIC(condition.namespaceIndex, condition.identifier.numeric), UA_TRUE);
+    return addReference(server, conditionSource, UA_NODEID_NUMERIC(0, UA_NS0ID_HASCONDITION),
+                        UA_EXPANDEDNODEID_NUMERIC(condition.namespaceIndex, condition.identifier.numeric), UA_TRUE);
 }
 
 static UA_StatusCode
@@ -799,18 +778,23 @@ setAlramActiveCallback(UA_Server *server, const UA_NodeId *sessionId,
                     void *sessionContext, const UA_NodeId *nodeId,
                     void *nodeContext, const UA_NumericRange *range,
                     const UA_DataValue *data) {
+    UA_LOCK(server->serviceMutex);
     UA_NodeId twoStateVariableId;
     UA_StatusCode retval = getParent(server, nodeId, &twoStateVariableId);
-    if(retval)
+    if(retval) {
+        UA_UNLOCK(server->serviceMutex);
         return;
+    }
     UA_NodeId alarmId;
     retval = getParent(server, &twoStateVariableId, &alarmId);
-    if(retval)
+    if(retval) {
+        UA_UNLOCK(server->serviceMutex);
         return;
+    }
     bool currentActive = *(UA_Boolean*)data->value.data;
     bool prevActive = !currentActive;
     UA_Variant activeTxt;
-    retval = UA_Server_readValue(server, twoStateVariableId, &activeTxt);
+    retval = readWithReadValue(server, &twoStateVariableId, UA_ATTRIBUTEID_VALUE, &activeTxt);
     if(!retval) {
         if(activeTxt.type == &UA_TYPES[UA_TYPES_LOCALIZEDTEXT]) {
             UA_LocalizedText *txt = (UA_LocalizedText*)activeTxt.data;
@@ -822,7 +806,8 @@ setAlramActiveCallback(UA_Server *server, const UA_NodeId *sessionId,
     }
     UA_LocalizedText acTxt = currentActive ? UA_ACTIVE_TXT : UA_NACTIVE_TXT;
     UA_Variant_setScalar(&activeTxt, &acTxt, &UA_TYPES[UA_TYPES_LOCALIZEDTEXT]);
-    UA_Server_writeValue(server, twoStateVariableId, activeTxt);
+    writeWithWriteValue(server, &twoStateVariableId, UA_ATTRIBUTEID_VALUE,
+                        &UA_TYPES[UA_TYPES_VARIANT], &activeTxt);
     if(currentActive != prevActive) {
         UA_NodeId *sourceNode;
         getSourceNode(server, alarmId, &sourceNode);
@@ -831,6 +816,7 @@ setAlramActiveCallback(UA_Server *server, const UA_NodeId *sessionId,
     }
     UA_NodeId_clear(&twoStateVariableId);
     UA_NodeId_clear(&alarmId);
+    UA_UNLOCK(server->serviceMutex);
 }
 
 static UA_StatusCode
@@ -838,7 +824,7 @@ initAlarmCondition(UA_Server *server, const UA_NodeId condition) {
     UA_StatusCode retval = UA_STATUSCODE_GOOD;
     retval |= setActiveState(server, condition, false);
     UA_STACKARRAY(UA_QualifiedName, idpath, 2) = { UA_QUALIFIEDNAME(0, "ActiveState"), UA_QUALIFIEDNAME(0, "Id") };
-    UA_BrowsePathResult bpr = UA_Server_browseSimplifiedBrowsePath(server, condition, 2, idpath);
+    UA_BrowsePathResult bpr = browseSimplifiedBrowsePath(server, condition, 2, idpath);
     if(bpr.statusCode != UA_STATUSCODE_GOOD)
         return bpr.statusCode;
     if(bpr.targetsSize != 1)
@@ -847,7 +833,7 @@ initAlarmCondition(UA_Server *server, const UA_NodeId condition) {
     UA_ValueCallback callback;
     callback.onRead = NULL;
     callback.onWrite = setAlramActiveCallback;
-    UA_Server_setVariableNode_valueCallback(server, activeStateId, callback);
+    setVariableNode_valueCallback(server, activeStateId, callback);
     UA_BrowsePathResult_deleteMembers(&bpr);
     return retval;
 }
@@ -860,11 +846,11 @@ initAcknowlagebleCondtion(UA_Server *server, const UA_NodeId condition) {
     attr.displayName.text = UA_CONDITION_CONFIRMEDSTATE.name;
     UA_NodeId_copy(&UA_TYPES[UA_TYPES_LOCALIZEDTEXT].typeId, &attr.dataType);
     attr.valueRank = -1;
-    retval |= UA_Server_addVariableNode(server, UA_NODEID_NULL, condition, 
+    retval |= addVariableNode(server, UA_NODEID_NULL, condition, 
         UA_NODEID_NUMERIC(0, UA_NS0ID_HASCOMPONENT), UA_CONDITION_CONFIRMEDSTATE, 
         UA_NODEID_NUMERIC(0, UA_NS0ID_TWOSTATEVARIABLETYPE), attr, NULL, NULL);
 
-    retval |= UA_Server_addReference(server, condition, UA_NODEID_NUMERIC(0, UA_NS0ID_HASCOMPONENT),
+    retval |= addReference(server, condition, UA_NODEID_NUMERIC(0, UA_NS0ID_HASCOMPONENT),
                                     UA_EXPANDEDNODEID_NUMERIC(0, UA_NS0ID_ACKNOWLEDGEABLECONDITIONTYPE_CONFIRM), true);*/
 
     return retval;
@@ -905,27 +891,16 @@ static UA_StatusCode
 refresh(UA_Server *server, UA_MonitoredItem *monItem) {
     UA_StatusCode retval = UA_STATUSCODE_GOOD;
     UA_NodeId serverNode = UA_NODEID_NUMERIC(0, UA_NS0ID_SERVER);
-    UA_NodeId refreshStart;
-    UA_NodeId refreshEnd;
-    retval |= UA_Server_createEvent(server, UA_NODEID_NUMERIC(0, UA_NS0ID_REFRESHSTARTEVENTTYPE), &refreshStart);
-    retval |= UA_Server_createEvent(server, UA_NODEID_NUMERIC(0, UA_NS0ID_REFRESHENDEVENTTYPE), &refreshEnd);
 
-    //retval |= eventSetStandardFields(server, &refreshStart, &serverNode, NULL);
-    //retval |= UA_Event_addEventToMonitoredItem(server, &refreshStart, monItem);
-    retval |= UA_Server_triggerEvent(server, refreshStart, serverNode, NULL, true);
-
+    AAC_Context* aacCtx = ((AAC_Context*)server->aacCtx);
+    retval |= eventSetStandardFields(server, &aacCtx->refreshStartEventNodeId, &serverNode, NULL);
+    retval |= UA_Event_addEventToMonitoredItem(server, &aacCtx->refreshStartEventNodeId, monItem);
     struct EventsEntry *ee = NULL;
-    struct Events* events = ((struct Events*)server->aacCtx);
-    LIST_FOREACH(ee, &events->list, listEntry) {
+    LIST_FOREACH(ee, &aacCtx->eventsList, listEntry) {
         UA_Event_addEventToMonitoredItem(server, &ee->conditionId, monItem);
     }
-
-    //retval |= eventSetStandardFields(server, &refreshEnd, &serverNode, NULL);
-    //retval |= UA_Event_addEventToMonitoredItem(server, &refreshEnd, monItem);
-    retval |= UA_Server_triggerEvent(server, refreshEnd, serverNode, NULL, true);
-
-    deleteNode(server, refreshStart, UA_TRUE);
-    deleteNode(server, refreshEnd, UA_TRUE);
+    retval |= eventSetStandardFields(server, &aacCtx->refreshEndEventNodeId, &serverNode, NULL);
+    retval |= UA_Event_addEventToMonitoredItem(server, &aacCtx->refreshEndEventNodeId, monItem);
 
     return retval;
 }
@@ -938,16 +913,18 @@ refreshMethodCallback(UA_Server *server, const UA_NodeId *sessionId,
                      const UA_Variant *input, size_t outputSize,
                      UA_Variant *output) {
     UA_StatusCode retval = UA_STATUSCODE_GOOD;
-
+    UA_LOCK(server->serviceMutex);
     UA_Session *session = UA_Server_getSessionById(server, sessionId);
     UA_Subscription *subscription = UA_Session_getSubscriptionById(session, *((UA_UInt32 *)input[0].data));
-    if(subscription == NULL)
+    if(subscription == NULL) {
+        UA_UNLOCK(server->serviceMutex);
         return UA_STATUSCODE_BADSUBSCRIPTIONIDINVALID;
+    }
     UA_MonitoredItem *monitoredItem;
     LIST_FOREACH(monitoredItem, &subscription->monitoredItems, listEntry) {
         retval |= refresh(server, monitoredItem);
     }
-        
+    UA_UNLOCK(server->serviceMutex);
     return retval;
 }
 
@@ -958,15 +935,22 @@ refresh2MethodCallback(UA_Server *server, const UA_NodeId *sessionId,
                      void *objectContext, size_t inputSize,
                      const UA_Variant *input, size_t outputSize,
                      UA_Variant *output) {
+    UA_LOCK(server->serviceMutex);
     UA_Session *session = UA_Server_getSessionById(server, sessionId);
     UA_Subscription *subscription = UA_Session_getSubscriptionById(session, *((UA_UInt32 *)input[0].data));
-    if(subscription == NULL)
+    if(subscription == NULL) {
+        UA_UNLOCK(server->serviceMutex);
         return UA_STATUSCODE_BADSUBSCRIPTIONIDINVALID;
+    }
     UA_MonitoredItem *monitoredItem = UA_Subscription_getMonitoredItem(subscription, *((UA_UInt32 *)input[1].data));
-    if(monitoredItem == NULL)
+    if(monitoredItem == NULL) {
+        UA_UNLOCK(server->serviceMutex);
         return UA_STATUSCODE_BADMONITOREDITEMIDINVALID;
+    }
+    UA_StatusCode retval = refresh(server, monitoredItem);
+    UA_UNLOCK(server->serviceMutex);
 
-    return refresh(server, monitoredItem);
+    return retval;
 }
 
 static UA_StatusCode
@@ -976,11 +960,12 @@ acknowledgeCallback(UA_Server *server, const UA_NodeId *sessionId,
                      void *objectContext, size_t inputSize,
                      const UA_Variant *input, size_t outputSize,
                      UA_Variant *output) {
+    UA_LOCK(server->serviceMutex);
     UA_ByteString *eventId = (UA_ByteString*)input[0].data;
     UA_LocalizedText *comment = (UA_LocalizedText*)input[1].data;
     struct EventsEntry *ee = NULL, *ee_tmp = NULL;
-    struct Events* events = ((struct Events*)server->aacCtx);
-    LIST_FOREACH_SAFE(ee, &events->list, listEntry, ee_tmp) {
+    AAC_Context* aacCtx = ((AAC_Context*)server->aacCtx);
+    LIST_FOREACH_SAFE(ee, &aacCtx->eventsList, listEntry, ee_tmp) {
         if(UA_ByteString_equal(&ee->eventId, eventId)){
             UA_Boolean isAcked;
             UA_StatusCode retval = getAckedState(server, ee->conditionId, &isAcked);
@@ -992,22 +977,24 @@ acknowledgeCallback(UA_Server *server, const UA_NodeId *sessionId,
             setAckedState(server, ee->conditionId, true);
             setRetain(server, ee->conditionId, false);
             UA_NodeId *source;
-            UA_Server_getNodeContext(server, ee->conditionId, (void**)&source);
-            retval |= UA_Server_triggerEvent(server, ee->conditionId, *source, NULL, UA_FALSE);
+            getNodeContext(server, ee->conditionId, (void**)&source);
+            retval |= triggerEvent(server, ee->conditionId, *source, NULL, UA_FALSE);
             LIST_REMOVE(ee, listEntry);
             UA_NodeId conditionId;
             UA_NodeId_copy(&ee->conditionId, &conditionId);
             EventsEntry_delete(server, ee);
-            UA_Server_deleteNode(server, conditionId, false);
+            deleteNode(server, conditionId, false);
             UA_NodeId_clear(&conditionId);
+            UA_UNLOCK(server->serviceMutex);
             return UA_STATUSCODE_GOOD;
         }
     }
+    UA_UNLOCK(server->serviceMutex);
     return UA_STATUSCODE_BADNODEIDINVALID;
 }
 
 static UA_StatusCode
-__UA_Server_setConditionRefreshMethods(UA_Server *server) {
+setConditionRefreshMethods(UA_Server *server) {
     UA_StatusCode retval;
     retval  = UA_Server_setMethodNode_callback(server,
         UA_NODEID_NUMERIC(0, UA_NS0ID_CONDITIONTYPE_CONDITIONREFRESH), refreshMethodCallback);
@@ -1015,36 +1002,44 @@ __UA_Server_setConditionRefreshMethods(UA_Server *server) {
         UA_NODEID_NUMERIC(0, UA_NS0ID_CONDITIONTYPE_CONDITIONREFRESH2), refresh2MethodCallback);
     retval |= UA_Server_setMethodNode_callback(server,
         UA_NODEID_NUMERIC(0, UA_NS0ID_ACKNOWLEDGEABLECONDITIONTYPE_ACKNOWLEDGE), acknowledgeCallback);
-    retval |= setEnableMethod(server);
-    retval |= setDisableMethod(server);
+    retval |= UA_Server_setMethodNode_callback(server,
+        UA_NODEID_NUMERIC(0, UA_NS0ID_CONDITIONTYPE_ENABLE), enableMethodCallback);
+    retval |= UA_Server_setMethodNode_callback(server,
+        UA_NODEID_NUMERIC(0, UA_NS0ID_CONDITIONTYPE_DISABLE), disableMethodCallback);
     return retval;
 }
 
 UA_StatusCode
 UA_Server_initAlarmsAndConditions(UA_Server *server) {
-    struct Events *e = (struct Events*)UA_malloc(sizeof(struct Events));
-    LIST_INIT(&e->list);
-    server->aacCtx = e;
+    server->aacCtx = malloc(sizeof(AAC_Context));
+    AAC_Context* aacCtx = ((AAC_Context*)server->aacCtx);
+    LIST_INIT(&aacCtx->eventsList);
     
     makeRefreshEventsConcrete(server);
-    return __UA_Server_setConditionRefreshMethods(server);
+    UA_StatusCode retval = setConditionRefreshMethods(server);
+    retval |= UA_Server_createEvent(server, UA_NODEID_NUMERIC(0, UA_NS0ID_REFRESHSTARTEVENTTYPE), &aacCtx->refreshStartEventNodeId);
+    retval |= UA_Server_createEvent(server, UA_NODEID_NUMERIC(0, UA_NS0ID_REFRESHENDEVENTTYPE), &aacCtx->refreshEndEventNodeId);
+    return retval;
 }
 
 void
 UA_Server_deinitAlarmsAndConditions(UA_Server *server) {
     struct EventsEntry *ee = NULL, *ee_tmp = NULL;
-    struct Events* events = ((struct Events*)server->aacCtx);
-    LIST_FOREACH_SAFE(ee, &events->list, listEntry, ee_tmp) {
+    AAC_Context* aacCtx = ((AAC_Context*)server->aacCtx);
+    LIST_FOREACH_SAFE(ee, &aacCtx->eventsList, listEntry, ee_tmp) {
         LIST_REMOVE(ee, listEntry);
         EventsEntry_delete(server, ee);
     }
-    free(events);
+    deleteNode(server, aacCtx->refreshStartEventNodeId, UA_TRUE);
+    deleteNode(server, aacCtx->refreshEndEventNodeId, UA_TRUE);
+    free(aacCtx);
 }
 
 UA_StatusCode
 UA_Server_initCondtion(UA_Server *server, const UA_NodeId condition, const UA_NodeId conditionSource) {
     UA_StatusCode statusCode = UA_STATUSCODE_GOOD;
     UA_NodeId eventTypeId;
+    UA_LOCK(server->serviceMutex);
     getNodeType_(server, condition, &eventTypeId);
     if(isConditionType(server, eventTypeId)) {
         initCondtion(server, condition, conditionSource);
@@ -1059,6 +1054,7 @@ UA_Server_initCondtion(UA_Server *server, const UA_NodeId condition, const UA_No
     } else {
         statusCode = UA_STATUSCODE_BADINVALIDARGUMENT;
     }
+    UA_UNLOCK(server->serviceMutex);
 
     return statusCode;
 }
