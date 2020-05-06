@@ -158,6 +158,10 @@ struct UA_Server {
 
     /* Statistics */
     UA_ServerStatistics serverStats;
+
+#ifdef UA_ENABLE_CUSTOM_ALARMS_CONDITIONS
+    void *aacCtx;
+#endif
 };
 
 /**************************/
@@ -267,6 +271,19 @@ UA_StatusCode
 getParentTypeAndInterfaceHierarchy(UA_Server *server, const UA_NodeId *typeNode,
                                    UA_NodeId **typeHierarchy, size_t *typeHierarchySize);
 
+#ifdef UA_ENABLE_CUSTOM_ALARMS_CONDITIONS
+
+UA_StatusCode UA_EXPORT
+UA_getConditionId(UA_Server *server, const UA_NodeId *conditionNodeId, UA_NodeId *outConditionId);
+
+UA_StatusCode
+UA_Server_initAlarmsAndConditions(UA_Server *server);
+
+void
+UA_Server_deinitAlarmsAndConditions(UA_Server *server);
+
+#endif
+
 #ifdef UA_ENABLE_SUBSCRIPTIONS_ALARMS_CONDITIONS
 
 UA_StatusCode UA_EXPORT
@@ -375,6 +392,25 @@ writeObjectProperty(UA_Server *server, const UA_NodeId objectId,
 
 UA_StatusCode
 getNodeContext(UA_Server *server, UA_NodeId nodeId, void **nodeContext);
+
+UA_StatusCode
+setNodeContext(UA_Server *server, UA_NodeId nodeId, void *nodeContext);
+
+UA_StatusCode
+setVariableNode_valueCallback(UA_Server *server,
+                              const UA_NodeId nodeId,
+                              const UA_ValueCallback callback);
+
+UA_StatusCode
+addReference(UA_Server *server, const UA_NodeId sourceId,
+             const UA_NodeId refTypeId,
+             const UA_ExpandedNodeId targetId,
+             UA_Boolean isForward);
+
+UA_StatusCode
+triggerEvent(UA_Server *server, const UA_NodeId eventNodeId,
+             const UA_NodeId origin, UA_ByteString *outEventId,
+             const UA_Boolean deleteEventNode);
 
 void
 removeCallback(UA_Server *server, UA_UInt64 callbackId);
@@ -514,6 +550,12 @@ UA_StatusCode writeNs0VariableArray(UA_Server *server, UA_UInt32 id, void *v,
 
 #define UA_NODESTORE_REMOVE(server, nodeId)                             \
     server->config.nodestore.removeNode(server->config.nodestore.context, nodeId)
+
+#ifdef UA_ENABLE_CUSTOM_ALARMS_CONDITIONS
+UA_StatusCode
+copyNodeChildren(UA_Server *server, UA_Session *session,
+                 const UA_NodeId *source, const UA_NodeId *destination);
+#endif
 
 _UA_END_DECLS
 

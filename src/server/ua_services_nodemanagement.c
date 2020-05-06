@@ -66,6 +66,14 @@ editNodeContext(UA_Server *server, UA_Session* session,
 }
 
 UA_StatusCode
+setNodeContext(UA_Server *server, UA_NodeId nodeId,
+               void *nodeContext) {
+    UA_StatusCode retval = UA_Server_editNode(server, &server->adminSession, &nodeId,
+                              (UA_EditNodeCallback)editNodeContext, nodeContext);
+    return retval;
+}
+
+UA_StatusCode
 UA_Server_setNodeContext(UA_Server *server, UA_NodeId nodeId,
                          void *nodeContext) {
     UA_LOCK(server->serviceMutex);
@@ -1809,6 +1817,23 @@ void Service_AddReferences(UA_Server *server, UA_Session *session,
 }
 
 UA_StatusCode
+addReference(UA_Server *server, const UA_NodeId sourceId,
+             const UA_NodeId refTypeId,
+             const UA_ExpandedNodeId targetId,
+             UA_Boolean isForward) {
+    UA_AddReferencesItem item;
+    UA_AddReferencesItem_init(&item);
+    item.sourceNodeId = sourceId;
+    item.referenceTypeId = refTypeId;
+    item.isForward = isForward;
+    item.targetNodeId = targetId;
+
+    UA_StatusCode retval = UA_STATUSCODE_GOOD;
+    Operation_addReference(server, &server->adminSession, NULL, &item, &retval);
+    return retval;
+}
+
+UA_StatusCode
 UA_Server_addReference(UA_Server *server, const UA_NodeId sourceId,
                        const UA_NodeId refTypeId,
                        const UA_ExpandedNodeId targetId,
@@ -1923,7 +1948,16 @@ setValueCallback(UA_Server *server, UA_Session *session,
     return UA_STATUSCODE_GOOD;
 }
 
-
+UA_StatusCode
+setVariableNode_valueCallback(UA_Server *server,
+                              const UA_NodeId nodeId,
+                              const UA_ValueCallback callback) {
+    UA_StatusCode retval = UA_Server_editNode(server, &server->adminSession, &nodeId,
+                                              (UA_EditNodeCallback)setValueCallback,
+                                              /* cast away const because callback uses const anyway */
+                                              (UA_ValueCallback *)(uintptr_t) &callback);
+    return retval;
+}
 
 UA_StatusCode
 UA_Server_setVariableNode_valueCallback(UA_Server *server,
@@ -2275,3 +2309,11 @@ UA_Server_setNodeTypeLifecycle(UA_Server *server, UA_NodeId nodeId,
     UA_UNLOCK(server->serviceMutex);
     return retval;
 }
+
+#ifdef UA_ENABLE_CUSTOM_ALARMS_CONDITIONS
+UA_StatusCode
+copyNodeChildren(UA_Server *server, UA_Session *session,
+                 const UA_NodeId *source, const UA_NodeId *destination) {
+    return copyAllChildren(server, session, source, destination);
+}
+#endif
