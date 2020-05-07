@@ -1361,8 +1361,18 @@ UA_Server_triggerEvent(UA_Server *server, const UA_NodeId eventNodeId, const UA_
 
 #ifdef UA_ENABLE_CUSTOM_ALARMS_CONDITIONS
 
+typedef enum {
+    UA_CONDITIONS_HAVE_UNACKNOWLEDGED_ALARMS,
+    UA_CONDITIONS_ALL_ALARMS_ACKNOWLEDGED
+} UA_Conditions_Status;
+
+typedef void (*UA_Conditions_statusChangeCallback)(UA_Server *server, UA_Conditions_Status status);
+
 UA_StatusCode UA_EXPORT UA_THREADSAFE
 UA_Server_initCondtion(UA_Server *server, const UA_NodeId condition, const UA_NodeId conditionSource);
+
+UA_StatusCode UA_EXPORT UA_THREADSAFE
+UA_Server_setConditionsStatusChangeCallback(UA_Server *server, UA_Conditions_statusChangeCallback callback);
 
 #endif
 

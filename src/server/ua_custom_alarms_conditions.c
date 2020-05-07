@@ -31,13 +31,16 @@
 typedef struct {
     UA_NodeId sourceCondition;
 } BranchContext;
-struct EventsEntry {
-    LIST_ENTRY(EventsEntry) listEntry;
+
+struct UA_ConditionListEntry {
+    LIST_ENTRY(UA_ConditionListEntry) listEntry;
     UA_ByteString eventId;
     UA_NodeId conditionId;
 };
 
-static void EventsEntry_clear(UA_Server *server, struct EventsEntry *ee) {
+typedef LIST_HEAD(, UA_ConditionListEntry) UA_ConditionList;
+
+static void UA_ConditionListEntry_clear(UA_Server *server, struct UA_ConditionListEntry *ee) {
     BranchContext *ctx;
     UA_StatusCode retval = getNodeContext(server, ee->conditionId, (void**)&ctx);
     if(!retval) {
@@ -48,13 +51,15 @@ static void EventsEntry_clear(UA_Server *server, struct EventsEntry *ee) {
     UA_NodeId_clear(&ee->conditionId);
 }
 
-static void EventsEntry_delete(UA_Server *server, struct EventsEntry *ee) {
-    EventsEntry_clear(server, ee);
+static void UA_ConditionListEntry_deleteWithCtx(UA_Server *server, struct UA_ConditionListEntry *ee) {
+    UA_ConditionListEntry_clear(server, ee);
     free(ee);
 }
 
 typedef struct {
-    LIST_HEAD(, EventsEntry) eventsList;
+    size_t conditionListSize;
+    UA_ConditionList conditionList;
+    UA_Conditions_statusChangeCallback statusCallback;
     UA_NodeId refreshStartEventNodeId;
     UA_NodeId refreshEndEventNodeId;
 } AAC_Context;
@@ -227,9 +232,9 @@ UA_getConditionId(UA_Server *server, const UA_NodeId *conditionNodeId, UA_NodeId
         return UA_STATUSCODE_GOOD;
     }
 
-    struct EventsEntry *ee = NULL;
+    struct UA_ConditionListEntry *ee = NULL;
     AAC_Context* aacCtx = ((AAC_Context*)server->aacCtx);
-    LIST_FOREACH(ee, &aacCtx->eventsList, listEntry) {
+    LIST_FOREACH(ee, &aacCtx->conditionList, listEntry) {
         if(UA_NodeId_equal(&ee->conditionId, conditionNodeId)){
             BranchContext *ctx;
             getNodeContext(server, ee->conditionId, (void**)&ctx);
@@ -650,10 +655,11 @@ createBranch(UA_Server *server, const UA_NodeId conditionId, UA_NodeId *branchId
 
 static UA_StatusCode
 triggerCondition(UA_Server *server, const UA_NodeId conditionId, const UA_NodeId originId) {
-    UA_StatusCode retval = UA_STATUSCODE_GOOD;
+    UA_LOCK_ASSERT(server->serviceMutex, 1);
 
+    UA_StatusCode retval = UA_STATUSCODE_GOOD;
     AAC_Context* aacCtx = ((AAC_Context*)server->aacCtx);
-    struct EventsEntry *entry = (struct EventsEntry *)UA_malloc(sizeof(struct EventsEntry));
+    struct UA_ConditionListEntry *entry = (struct UA_ConditionListEntry *)UA_malloc(sizeof(struct UA_ConditionListEntry));
 
     UA_NodeId conditionType;
     getNodeType_(server, conditionId, &conditionType);
@@ -664,8 +670,15 @@ triggerCondition(UA_Server *server, const UA_NodeId conditionId, const UA_NodeId
     }
 
     initEvent(server, entry->conditionId);
-    LIST_INSERT_HEAD(&aacCtx->eventsList, entry, listEntry);
+    LIST_INSERT_HEAD(&aacCtx->conditionList, entry, listEntry);
+    aacCtx->conditionListSize++;
     retval |= triggerEvent(server, entry->conditionId, conditionId, &entry->eventId, UA_FALSE);
+
+    if(aacCtx->conditionListSize == 1) {
+        UA_UNLOCK(server->serviceMutex);
+        aacCtx->statusCallback(server, UA_CONDITIONS_HAVE_UNACKNOWLEDGED_ALARMS);
+        UA_LOCK(server->serviceMutex);
+    }
 
     return retval;
 }
@@ -808,7 +821,7 @@ setAlramActiveCallback(UA_Server *server, const UA_NodeId *sessionId,
     UA_Variant_setScalar(&activeTxt, &acTxt, &UA_TYPES[UA_TYPES_LOCALIZEDTEXT]);
     writeWithWriteValue(server, &twoStateVariableId, UA_ATTRIBUTEID_VALUE,
                         &UA_TYPES[UA_TYPES_VARIANT], &activeTxt);
-    if(currentActive != prevActive) {
+    if(currentActive || currentActive != prevActive) { // support multiple activations
         UA_NodeId *sourceNode;
         getSourceNode(server, alarmId, &sourceNode);
         triggerCondition(server, alarmId, *sourceNode);
@@ -895,8 +908,8 @@ refresh(UA_Server *server, UA_MonitoredItem *monItem) {
     AAC_Context* aacCtx = ((AAC_Context*)server->aacCtx);
     retval |= eventSetStandardFields(server, &aacCtx->refreshStartEventNodeId, &serverNode, NULL);
     retval |= UA_Event_addEventToMonitoredItem(server, &aacCtx->refreshStartEventNodeId, monItem);
-    struct EventsEntry *ee = NULL;
-    LIST_FOREACH(ee, &aacCtx->eventsList, listEntry) {
+    struct UA_ConditionListEntry *ee = NULL;
+    LIST_FOREACH(ee, &aacCtx->conditionList, listEntry) {
         UA_Event_addEventToMonitoredItem(server, &ee->conditionId, monItem);
     }
     retval |= eventSetStandardFields(server, &aacCtx->refreshEndEventNodeId, &serverNode, NULL);
@@ -963,9 +976,9 @@ acknowledgeCallback(UA_Server *server, const UA_NodeId *sessionId,
     UA_LOCK(server->serviceMutex);
     UA_ByteString *eventId = (UA_ByteString*)input[0].data;
     UA_LocalizedText *comment = (UA_LocalizedText*)input[1].data;
-    struct EventsEntry *ee = NULL, *ee_tmp = NULL;
+    struct UA_ConditionListEntry *ee = NULL, *ee_tmp = NULL;
     AAC_Context* aacCtx = ((AAC_Context*)server->aacCtx);
-    LIST_FOREACH_SAFE(ee, &aacCtx->eventsList, listEntry, ee_tmp) {
+    LIST_FOREACH_SAFE(ee, &aacCtx->conditionList, listEntry, ee_tmp) {
         if(UA_ByteString_equal(&ee->eventId, eventId)){
             UA_Boolean isAcked;
             UA_StatusCode retval = getAckedState(server, ee->conditionId, &isAcked);
@@ -980,16 +993,19 @@ acknowledgeCallback(UA_Server *server, const UA_NodeId *sessionId,
             getNodeContext(server, ee->conditionId, (void**)&source);
             retval |= triggerEvent(server, ee->conditionId, *source, NULL, UA_FALSE);
             LIST_REMOVE(ee, listEntry);
+            size_t condListSize = --aacCtx->conditionListSize;
             UA_NodeId conditionId;
             UA_NodeId_copy(&ee->conditionId, &conditionId);
-            EventsEntry_delete(server, ee);
+            UA_ConditionListEntry_deleteWithCtx(server, ee);
             deleteNode(server, conditionId, false);
             UA_NodeId_clear(&conditionId);
             UA_UNLOCK(server->serviceMutex);
+            if(condListSize == 0)
+                aacCtx->statusCallback(server, UA_CONDITIONS_ALL_ALARMS_ACKNOWLEDGED);
             return UA_STATUSCODE_GOOD;
         }
     }
-    UA_UNLOCK(server->serviceMutex);
+
     return UA_STATUSCODE_BADNODEIDINVALID;
 }
 
@@ -1013,7 +1029,8 @@ UA_StatusCode
 UA_Server_initAlarmsAndConditions(UA_Server *server) {
     server->aacCtx = malloc(sizeof(AAC_Context));
     AAC_Context* aacCtx = ((AAC_Context*)server->aacCtx);
-    LIST_INIT(&aacCtx->eventsList);
+    LIST_INIT(&aacCtx->conditionList);
+    aacCtx->conditionListSize = 0;
     
     makeRefreshEventsConcrete(server);
     UA_StatusCode retval = setConditionRefreshMethods(server);
@@ -1024,11 +1041,11 @@ UA_Server_initAlarmsAndConditions(UA_Server *server) {
 
 void
 UA_Server_deinitAlarmsAndConditions(UA_Server *server) {
-    struct EventsEntry *ee = NULL, *ee_tmp = NULL;
+    struct UA_ConditionListEntry *ee = NULL, *ee_tmp = NULL;
     AAC_Context* aacCtx = ((AAC_Context*)server->aacCtx);
-    LIST_FOREACH_SAFE(ee, &aacCtx->eventsList, listEntry, ee_tmp) {
+    LIST_FOREACH_SAFE(ee, &aacCtx->conditionList, listEntry, ee_tmp) {
         LIST_REMOVE(ee, listEntry);
-        EventsEntry_delete(server, ee);
+        UA_ConditionListEntry_deleteWithCtx(server, ee);
     }
     UA_Server_deleteNode(server, aacCtx->refreshStartEventNodeId, UA_TRUE);
     UA_Server_deleteNode(server, aacCtx->refreshEndEventNodeId, UA_TRUE);
@@ -1055,6 +1072,18 @@ UA_Server_initCondtion(UA_Server *server, const UA_NodeId condition, const UA_No
         statusCode = UA_STATUSCODE_BADINVALIDARGUMENT;
     }
     UA_UNLOCK(server->serviceMutex);
-
     return statusCode;
+}
+
+UA_StatusCode UA_EXPORT UA_THREADSAFE
+UA_Server_setConditionsStatusChangeCallback(UA_Server *server, UA_Conditions_statusChangeCallback callback) {
+    UA_StatusCode retval = UA_STATUSCODE_BADINTERNALERROR;
+    UA_LOCK(server->serviceMutex);
+    AAC_Context* aacCtx = ((AAC_Context*)server->aacCtx);
+    if(aacCtx) {
+        aacCtx->statusCallback = callback;
+        retval = UA_STATUSCODE_GOOD;
+    }
+    UA_UNLOCK(server->serviceMutex);
+    return retval;
 }
