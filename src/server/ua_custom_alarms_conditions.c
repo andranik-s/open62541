@@ -27,6 +27,7 @@
 #define UA_NCONFIRMED_TXT UA_LOCALIZEDTEXT(LOCALE, (char*)"Unconfirmed")
 #define UA_ACTIVE_TXT UA_LOCALIZEDTEXT(LOCALE, (char*)"Active")
 #define UA_NACTIVE_TXT UA_LOCALIZEDTEXT(LOCALE, (char*)"Inactive")
+#define ACKNOWLEDGED_PREFIX_TXT UA_LOCALIZEDTEXT(LOCALE, (char*)"Квитировано: ") //TODO: move to cfg
 
 typedef struct {
     UA_NodeId sourceCondition;
@@ -142,7 +143,7 @@ deepCopyNode(UA_Server *server, const UA_NodeId source, UA_NodeId *dest) {
 DEFINE_WRITE_SCALAR_PROPERTY_FUNCTION(UA_Boolean, UA_TYPES_BOOLEAN)
 DEFINE_WRITE_SCALAR_PROPERTY_FUNCTION(UA_DateTime, UA_TYPES_DATETIME)
 DEFINE_WRITE_SCALAR_PROPERTY_FUNCTION(UA_UInt16, UA_TYPES_UINT16)
-//DEFINE_WRITE_SCALAR_PROPERTY_FUNCTION(UA_LocalizedText, UA_TYPES_LOCALIZEDTEXT)
+DEFINE_WRITE_SCALAR_PROPERTY_FUNCTION(UA_LocalizedText, UA_TYPES_LOCALIZEDTEXT)
 DEFINE_WRITE_SCALAR_PROPERTY_FUNCTION(UA_NodeId, UA_TYPES_NODEID)
 //DEFINE_WRITE_SCALAR_PROPERTY_FUNCTION(UA_String, UA_TYPES_STRING)
 
@@ -158,6 +159,7 @@ DEFINE_WRITE_SCALAR_PROPERTY_FUNCTION(UA_NodeId, UA_TYPES_NODEID)
     }
 
 DEFINE_READ_SCALAR_PROPERTY_FUNCTION(UA_NodeId, UA_TYPES_NODEID)
+DEFINE_READ_SCALAR_PROPERTY_FUNCTION(UA_LocalizedText, UA_TYPES_LOCALIZEDTEXT)
 
 static UA_StatusCode
 getNodeType_(UA_Server *server, const UA_NodeId nodeId, UA_NodeId *nodeTypeId) {
@@ -475,8 +477,8 @@ getChildId(UA_Server *server, const UA_NodeId obj, UA_QualifiedName subObjName, 
     return UA_STATUSCODE_GOOD;
 }*/
 
-/*static UA_StatusCode
-__concatenateLocalizedTexsts(UA_LocalizedText *out, const size_t n, ...) {
+static UA_StatusCode
+concatenateLocalizedTexsts(UA_LocalizedText *out, const size_t n, ...) {
     UA_LocalizedText_init(out);
 
     UA_Boolean differentLocales = UA_FALSE;
@@ -515,7 +517,7 @@ __concatenateLocalizedTexsts(UA_LocalizedText *out, const size_t n, ...) {
     va_end(stringList);
 
     return UA_STATUSCODE_GOOD;
-}*/
+}
 
 /*static UA_StatusCode
 triggerConditionEnableAuditEvent(UA_Server *server, const UA_NodeId condition, UA_Boolean enable, 
@@ -986,11 +988,22 @@ acknowledgeCallback(UA_Server *server, const UA_NodeId *sessionId,
                 return UA_STATUSCODE_BADMETHODINVALID;
             if(isAcked)
                 return UA_STATUSCODE_BADCONDITIONBRANCHALREADYACKED;
+            // Prepare new event
             setComment(server, ee->conditionId, *comment);
             setAckedState(server, ee->conditionId, true);
             setRetain(server, ee->conditionId, false);
             UA_NodeId *source;
             getNodeContext(server, ee->conditionId, (void**)&source);
+            initEvent(server, ee->conditionId);
+            UA_LocalizedText pref = ACKNOWLEDGED_PREFIX_TXT;
+            UA_LocalizedText *msg;
+            UA_LocalizedText newmsg;
+            read_UA_LocalizedText(server, ee->conditionId, UA_QUALIFIEDNAME(0, "Message"), &msg);
+            concatenateLocalizedTexsts(&newmsg, 2, pref, *msg);
+            write_UA_LocalizedText(server, ee->conditionId, UA_QUALIFIEDNAME(0, "Message"), newmsg);
+            UA_LocalizedText_clear(&newmsg);
+            UA_LocalizedText_delete(msg);
+            // Trigger it
             retval |= triggerEvent(server, ee->conditionId, *source, NULL, UA_FALSE);
             LIST_REMOVE(ee, listEntry);
             size_t condListSize = --aacCtx->conditionListSize;
