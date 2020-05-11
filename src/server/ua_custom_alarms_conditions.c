@@ -34,12 +34,12 @@ typedef struct {
 } BranchContext;
 
 struct UA_ConditionListEntry {
-    LIST_ENTRY(UA_ConditionListEntry) listEntry;
+    TAILQ_ENTRY(UA_ConditionListEntry) listEntry;
     UA_ByteString eventId;
     UA_NodeId conditionId;
 };
 
-typedef LIST_HEAD(, UA_ConditionListEntry) UA_ConditionList;
+typedef TAILQ_HEAD(, UA_ConditionListEntry) UA_ConditionList;
 
 static void UA_ConditionListEntry_clear(UA_Server *server, struct UA_ConditionListEntry *ee) {
     BranchContext *ctx;
@@ -236,7 +236,7 @@ UA_getConditionId(UA_Server *server, const UA_NodeId *conditionNodeId, UA_NodeId
 
     struct UA_ConditionListEntry *ee = NULL;
     AAC_Context* aacCtx = ((AAC_Context*)server->aacCtx);
-    LIST_FOREACH(ee, &aacCtx->conditionList, listEntry) {
+    TAILQ_FOREACH(ee, &aacCtx->conditionList, listEntry) {
         if(UA_NodeId_equal(&ee->conditionId, conditionNodeId)){
             BranchContext *ctx;
             getNodeContext(server, ee->conditionId, (void**)&ctx);
@@ -672,7 +672,7 @@ triggerCondition(UA_Server *server, const UA_NodeId conditionId, const UA_NodeId
     }
 
     initEvent(server, entry->conditionId);
-    LIST_INSERT_HEAD(&aacCtx->conditionList, entry, listEntry);
+    TAILQ_INSERT_TAIL(&aacCtx->conditionList, entry, listEntry);
     aacCtx->conditionListSize++;
     retval |= triggerEvent(server, entry->conditionId, conditionId, &entry->eventId, UA_FALSE);
 
@@ -911,7 +911,7 @@ refresh(UA_Server *server, UA_MonitoredItem *monItem) {
     retval |= eventSetStandardFields(server, &aacCtx->refreshStartEventNodeId, &serverNode, NULL);
     retval |= UA_Event_addEventToMonitoredItem(server, &aacCtx->refreshStartEventNodeId, monItem);
     struct UA_ConditionListEntry *ee = NULL;
-    LIST_FOREACH(ee, &aacCtx->conditionList, listEntry) {
+    TAILQ_FOREACH(ee, &aacCtx->conditionList, listEntry) {
         UA_Event_addEventToMonitoredItem(server, &ee->conditionId, monItem);
     }
     retval |= eventSetStandardFields(server, &aacCtx->refreshEndEventNodeId, &serverNode, NULL);
@@ -980,7 +980,7 @@ acknowledgeCallback(UA_Server *server, const UA_NodeId *sessionId,
     UA_LocalizedText *comment = (UA_LocalizedText*)input[1].data;
     struct UA_ConditionListEntry *ee = NULL, *ee_tmp = NULL;
     AAC_Context* aacCtx = ((AAC_Context*)server->aacCtx);
-    LIST_FOREACH_SAFE(ee, &aacCtx->conditionList, listEntry, ee_tmp) {
+    TAILQ_FOREACH_SAFE(ee, &aacCtx->conditionList, listEntry, ee_tmp) {
         if(UA_ByteString_equal(&ee->eventId, eventId)){
             UA_Boolean isAcked;
             UA_StatusCode retval = getAckedState(server, ee->conditionId, &isAcked);
@@ -1005,7 +1005,7 @@ acknowledgeCallback(UA_Server *server, const UA_NodeId *sessionId,
             UA_LocalizedText_delete(msg);
             // Trigger it
             retval |= triggerEvent(server, ee->conditionId, *source, NULL, UA_FALSE);
-            LIST_REMOVE(ee, listEntry);
+            TAILQ_REMOVE(&aacCtx->conditionList, ee, listEntry);
             size_t condListSize = --aacCtx->conditionListSize;
             UA_NodeId conditionId;
             UA_NodeId_copy(&ee->conditionId, &conditionId);
@@ -1042,7 +1042,7 @@ UA_StatusCode
 UA_Server_initAlarmsAndConditions(UA_Server *server) {
     server->aacCtx = malloc(sizeof(AAC_Context));
     AAC_Context* aacCtx = ((AAC_Context*)server->aacCtx);
-    LIST_INIT(&aacCtx->conditionList);
+    TAILQ_INIT(&aacCtx->conditionList);
     aacCtx->conditionListSize = 0;
     
     makeRefreshEventsConcrete(server);
@@ -1056,8 +1056,8 @@ void
 UA_Server_deinitAlarmsAndConditions(UA_Server *server) {
     struct UA_ConditionListEntry *ee = NULL, *ee_tmp = NULL;
     AAC_Context* aacCtx = ((AAC_Context*)server->aacCtx);
-    LIST_FOREACH_SAFE(ee, &aacCtx->conditionList, listEntry, ee_tmp) {
-        LIST_REMOVE(ee, listEntry);
+    TAILQ_FOREACH_SAFE(ee, &aacCtx->conditionList, listEntry, ee_tmp) {
+        TAILQ_REMOVE(&aacCtx->conditionList, ee, listEntry);
         UA_ConditionListEntry_deleteWithCtx(server, ee);
     }
     UA_Server_deleteNode(server, aacCtx->refreshStartEventNodeId, UA_TRUE);
