@@ -1365,6 +1365,12 @@ typedef enum {
 typedef void (*UA_Conditions_statusChangeCallback)(UA_Server *server, UA_Conditions_Status status);
 
 UA_StatusCode UA_EXPORT UA_THREADSAFE
+UA_Server_getRetainedConditions(UA_Server *server, UA_EventFilter *filter, size_t *conditionsSize, UA_EventFieldList **conditions);
+
+UA_StatusCode UA_EXPORT UA_THREADSAFE
+UA_Server_setRetainedConditions(UA_Server *server, UA_EventFilter *filter, size_t conditionsSize, UA_EventFieldList *conditions);
+
+UA_StatusCode UA_EXPORT UA_THREADSAFE
 UA_Server_initCondtion(UA_Server *server, const UA_NodeId condition, const UA_NodeId conditionSource);
 
 UA_StatusCode UA_EXPORT UA_THREADSAFE

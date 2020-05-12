@@ -196,7 +196,7 @@ resolveSimpleAttributeOperand(UA_Server *server, UA_Session *session, const UA_N
      * TypeDefinition. */
     if(sao->browsePathSize == 0) {
       UA_NodeId conditionTypeId = UA_NODEID_NUMERIC(0, UA_NS0ID_CONDITIONTYPE);
-
+    bool clearRvi = false;
 #if defined(UA_ENABLE_SUBSCRIPTIONS_ALARMS_CONDITIONS) || defined(UA_ENABLE_CUSTOM_ALARMS_CONDITIONS)
       //TODO check for Branches! One Condition could have multiple Branches
       // Set ConditionId
@@ -207,6 +207,7 @@ resolveSimpleAttributeOperand(UA_Server *server, UA_Session *session, const UA_N
           return retval;
 
         rvi.nodeId = conditionId;
+        clearRvi = true;
       }
       else
         rvi.nodeId = sao->typeDefinitionId;
@@ -220,6 +221,8 @@ resolveSimpleAttributeOperand(UA_Server *server, UA_Session *session, const UA_N
 		                                           UA_TIMESTAMPSTORETURN_NEITHER);
         if(v.status == UA_STATUSCODE_GOOD && v.hasValue)
             *value = v.value;
+        if(clearRvi)
+            UA_NodeId_clear(&rvi.nodeId);
         return v.status;
     }
 
@@ -247,7 +250,7 @@ resolveSimpleAttributeOperand(UA_Server *server, UA_Session *session, const UA_N
 
 /* Filters the given event with the given filter and writes the results into a
  * notification */
-static UA_StatusCode
+UA_StatusCode
 UA_Server_filterEvent(UA_Server *server, UA_Session *session,
                       const UA_NodeId *eventNode, UA_EventFilter *filter,
                       UA_EventNotification *notification) {

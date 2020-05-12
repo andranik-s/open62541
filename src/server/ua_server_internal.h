@@ -557,6 +557,11 @@ copyNodeChildren(UA_Server *server, UA_Session *session,
                  const UA_NodeId *source, const UA_NodeId *destination);
 #endif
 
+UA_StatusCode
+UA_Server_filterEvent(UA_Server *server, UA_Session *session,
+                      const UA_NodeId *eventNode, UA_EventFilter *filter,
+                      UA_EventNotification *notification);
+
 _UA_END_DECLS
 
 #endif /* UA_SERVER_INTERNAL_H_ */
