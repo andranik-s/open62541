@@ -63,6 +63,7 @@ typedef struct {
     UA_Conditions_statusChangeCallback statusCallback;
     UA_NodeId refreshStartEventNodeId;
     UA_NodeId refreshEndEventNodeId;
+    bool disableValueSetCallbacks;
 } AAC_Context;
 
 static void
@@ -226,13 +227,16 @@ UA_getConditionId(UA_Server *server, const UA_NodeId *conditionNodeId, UA_NodeId
     UA_StatusCode retval = getNodeType_(server, *conditionNodeId, &typeId);
     if(retval != UA_STATUSCODE_GOOD)
         return retval;
-    if(!isConditionType(server, typeId))
+    if(!isConditionType(server, typeId)) {
+        UA_NodeId_clear(&typeId);
         return UA_STATUSCODE_BADINVALIDARGUMENT;
-
+    }
     if(!isAcknowlageableConditionType(server, typeId)) {
+        UA_NodeId_clear(&typeId);
         UA_NodeId_copy(conditionNodeId, outConditionId);
         return UA_STATUSCODE_GOOD;
     }
+    UA_NodeId_clear(&typeId);
 
     struct UA_ConditionListEntry *ee = NULL;
     AAC_Context* aacCtx = ((AAC_Context*)server->aacCtx);
@@ -681,7 +685,7 @@ triggerCondition(UA_Server *server, const UA_NodeId conditionId, const UA_NodeId
         aacCtx->statusCallback(server, UA_CONDITIONS_HAVE_UNACKNOWLEDGED_ALARMS);
         UA_LOCK(server->serviceMutex);
     }
-
+    UA_NodeId_clear(&conditionType);
     return retval;
 }
 
@@ -763,6 +767,8 @@ initCondtion(UA_Server *server, const UA_NodeId condition, const UA_NodeId condi
     retval |= setSeverity(server, condition, DEFAULT_SEVERITY);
     retval |= setQuality(server, condition, UA_STATUSCODE_GOOD);
 
+    UA_NodeId_clear(&eventTypeId);
+
     return retval;
 }
 
@@ -794,6 +800,11 @@ setAlramActiveCallback(UA_Server *server, const UA_NodeId *sessionId,
                     void *nodeContext, const UA_NumericRange *range,
                     const UA_DataValue *data) {
     UA_LOCK(server->serviceMutex);
+    AAC_Context* aacCtx = ((AAC_Context*)server->aacCtx);
+    if(aacCtx->disableValueSetCallbacks) {
+        UA_UNLOCK(server->serviceMutex);
+        return;
+    }
     UA_NodeId twoStateVariableId;
     UA_StatusCode retval = getParent(server, nodeId, &twoStateVariableId);
     if(retval) {
@@ -1040,7 +1051,7 @@ setConditionRefreshMethods(UA_Server *server) {
 
 UA_StatusCode
 UA_Server_initAlarmsAndConditions(UA_Server *server) {
-    server->aacCtx = malloc(sizeof(AAC_Context));
+    server->aacCtx = calloc(1, sizeof(AAC_Context));
     AAC_Context* aacCtx = ((AAC_Context*)server->aacCtx);
     TAILQ_INIT(&aacCtx->conditionList);
     aacCtx->conditionListSize = 0;
@@ -1085,6 +1096,7 @@ UA_Server_initCondtion(UA_Server *server, const UA_NodeId condition, const UA_No
         statusCode = UA_STATUSCODE_BADINVALIDARGUMENT;
     }
     UA_UNLOCK(server->serviceMutex);
+    UA_NodeId_clear(&eventTypeId);
     return statusCode;
 }
 
@@ -1095,6 +1107,98 @@ UA_Server_setConditionsStatusChangeCallback(UA_Server *server, UA_Conditions_sta
     AAC_Context* aacCtx = ((AAC_Context*)server->aacCtx);
     if(aacCtx) {
         aacCtx->statusCallback = callback;
+        retval = UA_STATUSCODE_GOOD;
+    }
+    UA_UNLOCK(server->serviceMutex);
+    return retval;
+}
+
+UA_StatusCode UA_EXPORT UA_THREADSAFE
+UA_Server_getRetainedConditions(UA_Server *server, UA_EventFilter *filter, size_t *conditionsSize, UA_EventFieldList **conditions) {
+    UA_StatusCode retval = UA_STATUSCODE_BADINTERNALERROR;
+    UA_LOCK(server->serviceMutex);
+    AAC_Context* aacCtx = ((AAC_Context*)server->aacCtx);
+    if(aacCtx) {
+        *conditionsSize = aacCtx->conditionListSize;
+        *conditions = (UA_EventFieldList*)UA_Array_new(*conditionsSize, &UA_TYPES[UA_TYPES_EVENTFIELDLIST]);
+        size_t i = 0;
+        struct UA_ConditionListEntry *cle = NULL;
+        TAILQ_FOREACH(cle, &aacCtx->conditionList, listEntry) {
+            UA_EventNotification notification;
+            UA_Server_filterEvent(server, &server->adminSession, &cle->conditionId, filter, &notification);
+            (*conditions)[i++] = notification.fields;
+            /* EventFilterResult currently isn't being used
+            UA_EventFiterResult_clear(&notification->result); */
+        }
+        retval = UA_STATUSCODE_GOOD;
+    }
+    UA_UNLOCK(server->serviceMutex);
+    return retval;
+}
+
+UA_StatusCode UA_EXPORT UA_THREADSAFE
+UA_Server_setRetainedConditions(UA_Server *server, UA_EventFilter *filter, size_t conditionsSize, UA_EventFieldList *conditions) {
+    UA_StatusCode retval = UA_STATUSCODE_BADINTERNALERROR;
+    UA_LOCK(server->serviceMutex);
+    AAC_Context* aacCtx = ((AAC_Context*)server->aacCtx);
+    if(aacCtx) {
+        aacCtx->disableValueSetCallbacks = true;
+        UA_QualifiedName eventTypeQn = UA_QUALIFIEDNAME(0, "EventType");
+        UA_QualifiedName eventIdQn = UA_QUALIFIEDNAME(0, "EventId");
+        UA_NodeId condTypeId = UA_NODEID_NUMERIC(0, UA_NS0ID_CONDITIONTYPE);
+        for(size_t condI = 0; condI < conditionsSize; ++condI) {
+            UA_EventFieldList *cond = &conditions[condI];
+            UA_NodeId *conditionType = NULL, *conditionId = NULL;
+            UA_ByteString *eventId = NULL;
+            for(size_t i = 0; i < filter->selectClausesSize; ++i) {
+                UA_SimpleAttributeOperand *sc = &filter->selectClauses[i];
+                if(sc->attributeId == UA_ATTRIBUTEID_VALUE && 
+                        sc->browsePathSize == 1 && UA_QualifiedName_equal(sc->browsePath, &eventTypeQn) &&
+                        cond->eventFields[i].type == &UA_TYPES[UA_TYPES_NODEID])
+                    conditionType = (UA_NodeId*)cond->eventFields[i].data;
+                if(sc->attributeId == UA_ATTRIBUTEID_VALUE && 
+                        sc->browsePathSize == 1 && UA_QualifiedName_equal(sc->browsePath, &eventIdQn) &&
+                        cond->eventFields[i].type == &UA_TYPES[UA_TYPES_BYTESTRING])
+                    eventId = (UA_ByteString*)cond->eventFields[i].data;
+                UA_Variant v = cond->eventFields[i];
+                if(sc->browsePathSize == 0 && UA_NodeId_equal(&sc->typeDefinitionId, &condTypeId))
+                    v = cond->eventFields[i];
+                if(sc->browsePathSize == 0 && UA_NodeId_equal(&sc->typeDefinitionId, &condTypeId) &&
+                        v.type == &UA_TYPES[UA_TYPES_NODEID])
+                    conditionId = (UA_NodeId*)cond->eventFields[i].data;
+                if(conditionType && eventId && conditionId)
+                    break;
+            }
+            if(!conditionType || !eventId || !conditionId)
+                continue; // TODO: error?
+            struct UA_ConditionListEntry *entry = (struct UA_ConditionListEntry *)UA_malloc(sizeof(struct UA_ConditionListEntry));
+            if(isAcknowlageableConditionType(server, *conditionType)) {
+                createBranch(server, *conditionId, &entry->conditionId);
+            } else {
+                UA_NodeId_copy(conditionId, &entry->conditionId);
+            }
+            UA_ByteString_copy(eventId, &entry->eventId);
+            initEvent(server, entry->conditionId);
+            TAILQ_INSERT_TAIL(&aacCtx->conditionList, entry, listEntry);
+            aacCtx->conditionListSize++;
+            for(size_t i = 0; i < filter->selectClausesSize; ++i) {
+                UA_SimpleAttributeOperand *sc = &filter->selectClauses[i];
+                if(sc->attributeId == UA_ATTRIBUTEID_VALUE) {
+                    UA_BrowsePathResult bpr = browseSimplifiedBrowsePath(server, entry->conditionId, sc->browsePathSize, sc->browsePath);
+                    if(bpr.statusCode == UA_STATUSCODE_GOOD && bpr.targetsSize == 1) {
+                        writeWithWriteValue(server, &bpr.targets->targetId.nodeId, UA_ATTRIBUTEID_VALUE,
+                                            &UA_TYPES[UA_TYPES_VARIANT], &cond->eventFields[i]);
+                    }
+                    UA_BrowsePathResult_clear(&bpr);
+                }
+            }
+            if(aacCtx->conditionListSize == 1) {
+                UA_UNLOCK(server->serviceMutex);
+                aacCtx->statusCallback(server, UA_CONDITIONS_HAVE_UNACKNOWLEDGED_ALARMS);
+                UA_LOCK(server->serviceMutex);
+            }
+        }
+        aacCtx->disableValueSetCallbacks = false;
         retval = UA_STATUSCODE_GOOD;
     }
     UA_UNLOCK(server->serviceMutex);
