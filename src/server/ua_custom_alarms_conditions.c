@@ -680,9 +680,10 @@ triggerCondition(UA_Server *server, const UA_NodeId conditionId, const UA_NodeId
     aacCtx->conditionListSize++;
     retval |= triggerEvent(server, entry->conditionId, conditionId, &entry->eventId, UA_FALSE);
 
-    if(aacCtx->conditionListSize == 1) {
+    UA_Conditions_statusChangeCallback statusCallback = aacCtx->statusCallback;
+    if(aacCtx->conditionListSize == 1 && statusCallback) {
         UA_UNLOCK(server->serviceMutex);
-        aacCtx->statusCallback(server, UA_CONDITIONS_HAVE_UNACKNOWLEDGED_ALARMS);
+        statusCallback(server, UA_CONDITIONS_HAVE_UNACKNOWLEDGED_ALARMS);
         UA_LOCK(server->serviceMutex);
     }
     UA_NodeId_clear(&conditionType);
@@ -1023,13 +1024,14 @@ acknowledgeCallback(UA_Server *server, const UA_NodeId *sessionId,
             UA_ConditionListEntry_deleteWithCtx(server, ee);
             deleteNode(server, conditionId, false);
             UA_NodeId_clear(&conditionId);
+            UA_Conditions_statusChangeCallback statusCallback = aacCtx->statusCallback;
             UA_UNLOCK(server->serviceMutex);
-            if(condListSize == 0)
-                aacCtx->statusCallback(server, UA_CONDITIONS_ALL_ALARMS_ACKNOWLEDGED);
+            if(condListSize == 0 && statusCallback)
+                statusCallback(server, UA_CONDITIONS_ALL_ALARMS_ACKNOWLEDGED);
             return UA_STATUSCODE_GOOD;
         }
     }
-
+    UA_UNLOCK(server->serviceMutex);
     return UA_STATUSCODE_BADNODEIDINVALID;
 }
 
