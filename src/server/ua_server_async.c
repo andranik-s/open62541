@@ -209,8 +209,8 @@ AsyncManager_sendResponse(UA_AsyncManager *am, UA_AsyncTask *task) {
         return;
     }
     UA_StatusCode retval =
-        sendResponse(channel, task->requestId, task->request->requestHandle,
-                     task->response, task->responseType);
+        sendResponse(am->server, session, channel, task->requestId,
+                     (UA_Response*)task->response, task->responseType);
     if(retval != UA_STATUSCODE_GOOD) {
         if(!channel->connection) {
             UA_Server_closeSecureChannel(am->server, channel, UA_DIAGNOSTICEVENT_CLOSE);

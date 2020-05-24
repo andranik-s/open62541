@@ -659,11 +659,11 @@ processMSGDecoded(UA_Server *server, UA_SecureChannel *channel, UA_UInt32 reques
     UA_Service_async asyncService = UA_getAsyncService(requestType);
     if(asyncService) {
         UA_LOCK(server->serviceMutex);
-        asyncService(server, session, requestId, requestHeader, responseHeader);
+        asyncService(server, session, requestId, requestHeader, &response->responseHeader);
         UA_UNLOCK(server->serviceMutex);
 
         /* Async method calls remain. Don't send a response now */
-        if(responseHeader->serviceResult == UA_STATUSCODE_GOODCOMPLETESASYNCHRONOUSLY)
+        if(response->responseHeader.serviceResult == UA_STATUSCODE_GOODCOMPLETESASYNCHRONOUSLY)
             return UA_STATUSCODE_GOOD;
 
         /* We are done here */
