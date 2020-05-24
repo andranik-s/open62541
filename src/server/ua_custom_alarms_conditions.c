@@ -1007,14 +1007,16 @@ acknowledgeCallback(UA_Server *server, const UA_NodeId *sessionId,
             UA_NodeId *source;
             getNodeContext(server, ee->conditionId, (void**)&source);
             initEvent(server, ee->conditionId);
-            UA_LocalizedText pref = ACKNOWLEDGED_PREFIX_TXT;
             UA_LocalizedText *msg;
-            UA_LocalizedText newmsg;
             read_UA_LocalizedText(server, ee->conditionId, UA_QUALIFIEDNAME(0, "Message"), &msg);
-            concatenateLocalizedTexsts(&newmsg, 2, pref, *msg);
-            write_UA_LocalizedText(server, ee->conditionId, UA_QUALIFIEDNAME(0, "Message"), newmsg);
-            UA_LocalizedText_clear(&newmsg);
-            UA_LocalizedText_delete(msg);
+            if(msg) {
+                UA_LocalizedText pref = ACKNOWLEDGED_PREFIX_TXT;
+                UA_LocalizedText newmsg;
+                concatenateLocalizedTexsts(&newmsg, 2, pref, *msg);
+                write_UA_LocalizedText(server, ee->conditionId, UA_QUALIFIEDNAME(0, "Message"), newmsg);
+                UA_LocalizedText_clear(&newmsg);
+                UA_LocalizedText_delete(msg);
+            }
             // Trigger it
             retval |= triggerEvent(server, ee->conditionId, *source, NULL, UA_FALSE);
             TAILQ_REMOVE(&aacCtx->conditionList, ee, listEntry);
