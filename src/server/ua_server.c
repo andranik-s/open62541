@@ -580,7 +580,7 @@ UA_Server_run_startup(UA_Server *server) {
     for(size_t i = 0; i < server->config.networkLayersSize; ++i) {
         UA_ServerNetworkLayer *nl = &server->config.networkLayers[i];
         nl->statistics = &server->serverStats.ns;
-        result |= nl->start(nl, &server->config.customHostname);
+        result |= nl->start(nl, server, &server->config.customHostname);
     }
 
     /* Update the application description to match the previously added discovery urls.

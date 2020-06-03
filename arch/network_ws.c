@@ -240,7 +240,8 @@ const struct lws_protocol_vhost_options pvo_opt = {NULL, NULL, "default", "1"};
 const struct lws_protocol_vhost_options pvo = {NULL, &pvo_opt, "opcua", ""};
 
 static UA_StatusCode
-ServerNetworkLayerWS_start(UA_ServerNetworkLayer *nl, const UA_String *customHostname) {
+ServerNetworkLayerWS_start(UA_ServerNetworkLayer *nl,
+                           UA_Server *_, const UA_String *customHostname) {
     UA_initialize_architecture_network();
 
     ServerNetworkLayerWS *layer = (ServerNetworkLayerWS *)nl->handle;

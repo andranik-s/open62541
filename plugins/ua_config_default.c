@@ -318,6 +318,40 @@ UA_ServerConfig_addNetworkLayerTCP(UA_ServerConfig *conf, UA_UInt16 portNumber,
     return UA_STATUSCODE_GOOD;
 }
 
+// #ifdef UA_ENABLE_LIBEV
+UA_EXPORT UA_StatusCode
+UA_ServerConfig_addNetworkLayerTCP_libev(UA_ServerConfig *conf, UA_UInt16 portNumber,
+                                         UA_UInt32 sendBufferSize, UA_UInt32 recvBufferSize,
+                                         void *loop)
+{
+    /* Add a network layer */
+    UA_ServerNetworkLayer *tmp = (UA_ServerNetworkLayer *)
+        UA_realloc(conf->networkLayers,
+                   sizeof(UA_ServerNetworkLayer) * (1 + conf->networkLayersSize));
+    if(!tmp)
+        return UA_STATUSCODE_BADOUTOFMEMORY;
+    conf->networkLayers = tmp;
+
+    UA_ConnectionConfig config = UA_ConnectionConfig_default;
+    if (sendBufferSize > 0)
+        config.sendBufferSize = sendBufferSize;
+    if (recvBufferSize > 0)
+        config.recvBufferSize = recvBufferSize;
+
+    conf->networkLayers[conf->networkLayersSize] =
+        UA_ServerNetworkLayerTCP_libev(config, portNumber, 0, &conf->logger);
+    if (!conf->networkLayers[conf->networkLayersSize].handle)
+        return UA_STATUSCODE_BADOUTOFMEMORY;
+    conf->networkLayersSize++;
+
+    if(!loop || (conf->externalEventLoop && loop != conf->externalEventLoop))
+        return UA_STATUSCODE_BADINVALIDARGUMENT;
+    conf->externalEventLoop = loop;
+
+    return UA_STATUSCODE_GOOD;
+}
+// #endif
+
 UA_EXPORT UA_StatusCode
 UA_ServerConfig_addSecurityPolicyNone(UA_ServerConfig *config, 
                                       const UA_ByteString *certificate) {

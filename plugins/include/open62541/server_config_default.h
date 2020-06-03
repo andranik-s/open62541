@@ -125,6 +125,13 @@ UA_ServerConfig_addNetworkLayerWS(UA_ServerConfig *conf, UA_UInt16 portNumber,
                                   UA_UInt32 sendBufferSize, UA_UInt32 recvBufferSize);
 #endif
 
+// #ifdef UA_ENABLE_LIBEV
+UA_EXPORT UA_StatusCode
+UA_ServerConfig_addNetworkLayerTCP_libev(UA_ServerConfig *conf, UA_UInt16 portNumber,
+                                         UA_UInt32 sendBufferSize, UA_UInt32 recvBufferSize,
+                                         void *loop);
+// #endif
+
 /* Adds the security policy ``SecurityPolicy#None`` to the server. A
  * server certificate may be supplied but is optional.
  *

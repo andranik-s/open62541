@@ -144,6 +144,7 @@ option(UA_ENABLE_PARSING "Utility functions that require parsing (e.g. NodeId ex
 option(UA_ENABLE_DA "Enable OPC UA DataAccess (Part 8) definitions" ON)
 option(UA_ENABLE_MICRO_EMB_DEV_PROFILE "Builds CTT Compliant Micro Embedded Device Server Profile" OFF)
 option(UA_ENABLE_WEBSOCKET_SERVER "Enable websocket support (uses libwebsockets)" OFF)
+option(UA_ENABLE_LIBEV "Use libev for event-based processing" OFF)
 
 # security provider 
 if(UA_ENABLE_ENCRYPTION)
@@ -472,6 +473,13 @@ if(UA_ENABLE_WEBSOCKET_SERVER)
     # defined in /tools/cmake/Findlibwebsockets.cmake
     find_package(libwebsockets REQUIRED)
     list(APPEND open62541_LIBRARIES ${LIBWEBSOCKETS_LIBRARIES})
+endif()
+
+if(UA_ENABLE_LIBEV)
+    # The recommended way is to install libev via the OS package manager. If
+    # that is not possible, manually compile libev and set the cmake variables
+    # defined in /tools/cmake/Findlibev.cmake
+    list(APPEND open62541_LIBRARIES ev)
 endif()
 
 if(MINGW)
