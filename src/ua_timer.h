@@ -29,6 +29,9 @@ typedef struct {
     UA_TimerZip root; /* The root of the time-sorted zip tree */
     UA_TimerIdZip idRoot; /* The root of the id-sorted zip tree */
     UA_UInt64 idCounter;
+#ifdef UA_ENABLE_LIBEV
+    void *loop;
+#endif
 } UA_Timer;
 
 void UA_Timer_init(UA_Timer *t);

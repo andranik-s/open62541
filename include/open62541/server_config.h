@@ -278,9 +278,9 @@ struct UA_ServerConfig {
     UA_Boolean deleteAtTimeDataCapability;
 #endif
 
-// #ifdef UA_ENABLE_LIBEV
+#ifdef UA_ENABLE_LIBEV
     void *externalEventLoop;
-// #endif
+#endif
 };
 
 void UA_EXPORT

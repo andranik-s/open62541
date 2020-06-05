@@ -1053,7 +1053,7 @@ UA_ClientConnectionTCP(UA_ConnectionConfig config, const UA_String endpointUrl,
     return connection;
 }
 
-//#ifdef UA_ENABLE_LIBEV
+#ifdef UA_ENABLE_LIBEV
 
 #include <ev.h>
 #include <open62541/server_config.h>
@@ -1330,4 +1330,4 @@ UA_ServerNetworkLayerTCP_libev(UA_ConnectionConfig config, UA_UInt16 port,
     return nl;
 }
 
-//#endif // UA_ENABLE_LIBEV
+#endif // UA_ENABLE_LIBEV

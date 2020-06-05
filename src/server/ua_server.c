@@ -783,3 +783,15 @@ UA_Server_AccessControl_allowHistoryUpdateDeleteRawModified(UA_Server *server,
 
 }
 #endif /* UA_ENABLE_HISTORIZING */
+
+#ifdef UA_ENABLE_LIBEV
+UA_StatusCode UA_EXPORT UA_THREADSAFE
+UA_Server_setExternalEventLoop_libev(UA_Server *server, struct ev_loop *loop) {
+    if(!server->config.externalEventLoop) {
+        server->config.externalEventLoop = loop;
+        server->timer.loop = loop;
+        return UA_STATUSCODE_GOOD;
+    }
+    return UA_STATUSCODE_BADALREADYEXISTS;
+}
+#endif

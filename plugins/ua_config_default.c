@@ -318,12 +318,13 @@ UA_ServerConfig_addNetworkLayerTCP(UA_ServerConfig *conf, UA_UInt16 portNumber,
     return UA_STATUSCODE_GOOD;
 }
 
-// #ifdef UA_ENABLE_LIBEV
+#ifdef UA_ENABLE_LIBEV
 UA_EXPORT UA_StatusCode
 UA_ServerConfig_addNetworkLayerTCP_libev(UA_ServerConfig *conf, UA_UInt16 portNumber,
-                                         UA_UInt32 sendBufferSize, UA_UInt32 recvBufferSize,
-                                         void *loop)
+                                         UA_UInt32 sendBufferSize, UA_UInt32 recvBufferSize)
 {
+    if(!conf->externalEventLoop)
+        return UA_STATUSCODE_BADINVALIDSTATE;
     /* Add a network layer */
     UA_ServerNetworkLayer *tmp = (UA_ServerNetworkLayer *)
         UA_realloc(conf->networkLayers,
@@ -344,13 +345,9 @@ UA_ServerConfig_addNetworkLayerTCP_libev(UA_ServerConfig *conf, UA_UInt16 portNu
         return UA_STATUSCODE_BADOUTOFMEMORY;
     conf->networkLayersSize++;
 
-    if(!loop || (conf->externalEventLoop && loop != conf->externalEventLoop))
-        return UA_STATUSCODE_BADINVALIDARGUMENT;
-    conf->externalEventLoop = loop;
-
     return UA_STATUSCODE_GOOD;
 }
-// #endif
+#endif
 
 UA_EXPORT UA_StatusCode
 UA_ServerConfig_addSecurityPolicyNone(UA_ServerConfig *config, 
