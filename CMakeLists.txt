@@ -104,6 +104,11 @@ set(ua_architecture_headers ${ua_architecture_headers}
     ${PROJECT_SOURCE_DIR}/include/open62541/architecture_functions.h
 )
 
+if(UA_ENABLE_LIBEV)
+    set(ua_architecture_sources ${ua_architecture_sources}
+                                ${PROJECT_SOURCE_DIR}/arch/network_tcp_libev.c)
+endif()
+
 if(UA_ENABLE_WEBSOCKET_SERVER)
     set(ua_architecture_sources ${ua_architecture_sources}
                                 ${PROJECT_SOURCE_DIR}/arch/network_ws.c)
