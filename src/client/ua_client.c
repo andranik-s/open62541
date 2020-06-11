@@ -699,3 +699,15 @@ UA_Client_run_iterate(UA_Client *client, UA_UInt32 timeout) {
 
     return client->connectStatus;
 }
+
+#ifdef UA_ENABLE_LIBEV
+UA_StatusCode UA_EXPORT
+UA_Client_setExternalEventLoop_libev(UA_Client *client, struct ev_loop *loop) {
+    if(!client->config.externalEventLoop) {
+        client->config.externalEventLoop = loop;
+        cleint->timer.loop = loop;
+        return UA_STATUSCODE_GOOD;
+    }
+    return UA_STATUSCODE_BADALREADYEXISTS;
+}
+#endif

@@ -583,6 +583,12 @@ UA_Client_removeRepeatedCallback(UA_Client *client, UA_UInt64 callbackId) {
     UA_Client_removeCallback(client, callbackId);
 }
 
+#ifdef UA_ENABLE_LIBEV
+struct ev_loop;
+UA_StatusCode UA_EXPORT
+UA_Client_setExternalEventLoop_libev(UA_Client *client, struct ev_loop *loop);
+#endif
+
 /**
  * .. toctree::
  *
