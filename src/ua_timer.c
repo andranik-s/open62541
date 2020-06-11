@@ -8,20 +8,14 @@
 
 #include "ua_util_internal.h"
 #include "ua_timer.h"
+#include <open62541/ev.h>
 
 struct UA_TimerEntry {
     ZIP_ENTRY(UA_TimerEntry) zipfields;
     UA_DateTime nextTime;                    /* The next time when the callback
                                               * is to be executed */
-    UA_UInt64 interval;                      /* Interval in 100ns resolution */
-    UA_Boolean repeated;                     /* Repeated callback? */
-
-    UA_ApplicationCallback callback;
-    void *application;
-    void *data;
-
     ZIP_ENTRY(UA_TimerEntry) idZipfields;
-    UA_UInt64 id;                            /* Id of the entry */
+    UA_Ev_Timer evTimer;
 };
 
 /* There may be several entries with the same nextTime in the tree. We give them
@@ -54,7 +48,7 @@ cmpId(const UA_UInt64 *a, const UA_UInt64 *b) {
 }
 
 ZIP_PROTTYPE(UA_TimerIdZip, UA_TimerEntry, UA_UInt64)
-ZIP_IMPL(UA_TimerIdZip, UA_TimerEntry, idZipfields, UA_UInt64, id, cmpId)
+ZIP_IMPL(UA_TimerIdZip, UA_TimerEntry, idZipfields, UA_UInt64, evTimer.id, cmpId)
 
 void
 UA_Timer_init(UA_Timer *t) {
@@ -73,19 +67,20 @@ addCallback(UA_Timer *t, UA_ApplicationCallback callback, void *application, voi
     UA_TimerEntry *te = (UA_TimerEntry*)UA_malloc(sizeof(UA_TimerEntry));
     if(!te)
         return UA_STATUSCODE_BADOUTOFMEMORY;
+    te->evTimer = (UA_Ev_Timer*)UA_malloc(sizeof(UA_Ev_Timer));
 
     /* Set the repeated callback */
-    te->interval = (UA_UInt64)interval;
-    te->id = ++t->idCounter;
-    te->callback = callback;
-    te->application = application;
-    te->data = data;
-    te->repeated = repeated;
+    te->evTimer.interval = (UA_UInt64)interval;
+    te->evTimer.id = ++t->idCounter;
+    te->evTimer.callback = callback;
+    te->evTimer.application = application;
+    te->evTimer.data = data;
+    te->evTimer.repeated = repeated;
     te->nextTime = nextTime;
 
     /* Set the output identifier */
     if(callbackId)
-        *callbackId = te->id;
+        *callbackId = te->evTimer.id;
 
     ZIP_INSERT(UA_TimerZip, &t->root, te, ZIP_FFS32(UA_UInt32_random()));
     ZIP_INSERT(UA_TimerIdZip, &t->idRoot, te, ZIP_RANK(te, zipfields));
@@ -136,6 +131,13 @@ UA_Timer_changeRepeatedCallbackInterval(UA_Timer *t, UA_UInt64 callbackId,
     return UA_STATUSCODE_GOOD;
 }
 
+static void
+freeEntry(UA_TimerEntry *te, void *_) {
+    if(te->evTimer.cleanup)
+        te->evTimer.cleanup(te->evTimer);
+    UA_free(te);
+}
+
 void
 UA_Timer_removeCallback(UA_Timer *t, UA_UInt64 callbackId) {
     UA_TimerEntry *te = ZIP_FIND(UA_TimerIdZip, &t->idRoot, &callbackId);
@@ -144,7 +146,7 @@ UA_Timer_removeCallback(UA_Timer *t, UA_UInt64 callbackId) {
 
     ZIP_REMOVE(UA_TimerZip, &t->root, te);
     ZIP_REMOVE(UA_TimerIdZip, &t->idRoot, te);
-    UA_free(te);
+    freeEntry(te, NULL);
 }
 
 UA_DateTime
@@ -164,7 +166,7 @@ UA_Timer_process(UA_Timer *t, UA_DateTime nowMonotonic,
             ZIP_REMOVE(UA_TimerIdZip, &t->idRoot, first);
             executionCallback(executionApplication, first->callback,
                               first->application, first->data);
-            UA_free(first);
+            freeEntry(first, NULL);
             continue;
         }
 
@@ -181,11 +183,6 @@ UA_Timer_process(UA_Timer *t, UA_DateTime nowMonotonic,
     /* Return the timestamp of the earliest next callback */
     first = ZIP_MIN(UA_TimerZip, &t->root);
     return (first) ? first->nextTime : UA_INT64_MAX;
-}
-
-static void
-freeEntry(UA_TimerEntry *te, void *data) {
-    UA_free(te);
 }
 
 void
