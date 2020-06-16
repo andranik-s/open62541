@@ -699,3 +699,60 @@ UA_Client_run_iterate(UA_Client *client, UA_UInt32 timeout) {
 
     return client->connectStatus;
 }
+
+#ifdef UA_ENABLE_LIBEV
+UA_StatusCode
+UA_Client_run_iterate_externalEventLoop(UA_Client *client) {
+    /* Make sure we have an open channel */
+    UA_StatusCode retval = UA_STATUSCODE_GOOD;
+    if((client->noSession && client->channel.state != UA_SECURECHANNELSTATE_OPEN) ||
+       client->sessionState < UA_SESSIONSTATE_ACTIVATED) {
+        retval = connectIterate_init(client, 0);
+        notifyClientState(client);
+        return retval;
+    }
+
+    /* Renew Secure Channel */
+    renewSecureChannel(client);
+
+    /* Feed the server PublishRequests for the Subscriptions */
+#ifdef UA_ENABLE_SUBSCRIPTIONS
+    UA_Client_Subscriptions_backgroundPublish(client);
+#endif
+
+    /* Send read requests from time to time to test the connectivity */
+    UA_Client_backgroundConnectivity(client);
+
+#ifdef UA_ENABLE_SUBSCRIPTIONS
+    /* The inactivity check must be done after receiveServiceResponse*/
+    UA_Client_Subscriptions_backgroundPublishInactivityCheck(client);
+#endif
+
+    /* Did async services time out? Process callbacks with an error code */
+    asyncServiceTimeoutCheck(client);
+
+    /* Log and notify user if the client state has changed */
+    notifyClientState(client);
+
+    return client->connectStatus;
+}
+
+UA_StatusCode
+UA_Client_connect_iterate(UA_Client *client, UA_UInt32 timeout) {
+    return connectIterate(client, timeout);
+}
+#endif
+
+void
+UA_Client_processBinaryMessage(UA_Client *client, UA_Connection *connection,
+                               UA_ByteString *message) {
+    SyncResponseDescription rd = { client, false, 0, NULL, NULL };
+    UA_SecureChannel_processBuffer(&client->channel, &rd, processServiceResponse, message);
+    connectIterate(client, 0);
+}
+
+void
+UA_Client_closeChannel(UA_Client *client, UA_StatusCode connectionStatus) {
+    closeSecureChannel(client);
+    client->connectStatus = connectionStatus;
+}

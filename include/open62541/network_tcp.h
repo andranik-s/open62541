@@ -42,6 +42,13 @@ UA_ClientConnectionTCP_init(UA_ConnectionConfig config, const UA_String endpoint
 UA_ServerNetworkLayer UA_EXPORT
 UA_ServerNetworkLayerTCP_libev(UA_ConnectionConfig config, UA_UInt16 port,
                                UA_UInt16 maxConnections, UA_Logger *logger);
+
+UA_StatusCode UA_EXPORT
+UA_ClientConnectionTCP_poll_libev(UA_Client *client, void *data, UA_UInt32 timeout);
+
+UA_Connection UA_EXPORT
+UA_ClientConnectionTCP_init_libev(UA_ConnectionConfig config, const UA_String endpointUrl,
+                                  UA_UInt32 timeout, UA_Logger *logger);
 #endif
 
 _UA_END_DECLS

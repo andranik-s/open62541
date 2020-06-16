@@ -480,4 +480,249 @@ UA_ServerNetworkLayerTCP_libev(UA_ConnectionConfig config, UA_UInt16 port,
     return nl;
 }
 
+/***************************/
+/* Client NetworkLayer TCP */
+/***************************/
+
+typedef struct TCPClientConnection {
+    struct addrinfo hints, *server;
+    UA_DateTime connStart;
+    char* endpointURL;
+    UA_UInt32 timeout;
+    ev_io iow;
+    struct ev_loop *loop;
+    UA_Logger *logger;
+    UA_Client *client;
+} TCPClientConnection;
+
+static void
+ClientNetworkLayerTCP_close(UA_Connection *connection) {
+    if(connection->state == UA_CONNECTIONSTATE_CLOSED)
+        return;
+
+    if(connection->sockfd != UA_INVALID_SOCKET) {
+        TCPClientConnection *tcpConnection = (TCPClientConnection *)connection->handle;
+        ev_io_stop(tcpConnection->loop, &tcpConnection->iow);
+        UA_shutdown(connection->sockfd, 2);
+        UA_close(connection->sockfd);
+    }
+    connection->state = UA_CONNECTIONSTATE_CLOSED;
+}
+
+static void
+ClientNetworkLayerTCP_free(UA_Connection *connection) {
+    if(!connection->handle)
+        return;
+    
+    TCPClientConnection *tcpConnection = (TCPClientConnection *)connection->handle;
+    if(tcpConnection->server)
+        UA_freeaddrinfo(tcpConnection->server);
+    UA_free(tcpConnection);
+    connection->handle = NULL;
+}
+
+static void
+ClientNetworkLayerTCP_eventCallback(struct ev_loop *loop, ev_io *w, int revents) {
+    UA_Connection *connection = (UA_Connection*)w->data;
+    TCPClientConnection *tcpConnection = (TCPClientConnection*)connection->handle;
+    UA_Client *client = tcpConnection->client;
+    switch(connection->state) {
+        case UA_CONNECTIONSTATE_OPENING: {
+            OPTVAL_TYPE so_error;
+            socklen_t len = sizeof so_error;
+            int ret = UA_getsockopt(w->fd, SOL_SOCKET, SO_ERROR, &so_error, &len);
+
+            if(ret == 0 && so_error == 0) {
+                /* Connected */
+                connection->state = UA_CONNECTIONSTATE_ESTABLISHED;
+                ev_io_stop(loop, w);
+                ev_io_set(w, w->fd, EV_READ);
+                ev_io_start(loop, w);
+                UA_Client_connect_iterate(client, 0);
+                UA_LOG_WARNING(tcpConnection->logger, UA_LOGCATEGORY_NETWORK, "CONNECTED!!!");
+            } else {
+                /* General error */
+                ClientNetworkLayerTCP_close(connection);
+                UA_Client_closeChannel(client, UA_STATUSCODE_BADCONNECTIONREJECTED);
+                UA_LOG_WARNING(tcpConnection->logger, UA_LOGCATEGORY_NETWORK,
+                                "Connection to failed with error: %s",
+                                strerror(ret == 0 ? so_error : UA_ERRNO));
+            }
+            return;
+        }
+        case UA_CONNECTIONSTATE_ESTABLISHED: {
+            UA_ByteString buf = UA_BYTESTRING_NULL;
+            UA_StatusCode retval = connection_recv(connection, &buf, 0);
+
+            if(retval == UA_STATUSCODE_GOOD) {
+                /* Process packets */
+                UA_Client_processBinaryMessage(client, connection, &buf);
+                connection_releaserecvbuffer(connection, &buf);
+            }
+
+            UA_SecureChannelState channelState;
+            UA_Client_getState(client, &channelState, NULL, NULL);
+            if(retval != UA_STATUSCODE_GOOD ||
+                channelState == UA_SECURECHANNELSTATE_CLOSING) {
+                UA_LOG_WARNING(tcpConnection->logger, UA_LOGCATEGORY_NETWORK,
+                                    "Receiving the response failed with StatusCode %s",
+                                    UA_StatusCode_name(retval));
+                ev_io_stop(loop, w);
+                UA_Client_closeChannel(client, UA_STATUSCODE_BADCONNECTIONCLOSED);
+                break;
+            }
+        }
+        default:
+            return;
+    }
+}
+
+UA_StatusCode
+UA_ClientConnectionTCP_poll_libev(UA_Client *client, void *data, UA_UInt32 timeout) {
+    UA_Connection *connection = (UA_Connection*) data;
+    if(connection->state == UA_CONNECTIONSTATE_CLOSED)
+        return UA_STATUSCODE_BADDISCONNECT;
+    if(connection->state == UA_CONNECTIONSTATE_ESTABLISHED)
+        return UA_STATUSCODE_GOOD;
+    if(!UA_Client_getConfig(client)->externalEventLoop)
+        return UA_STATUSCODE_BADDISCONNECT;
+
+    TCPClientConnection *tcpConnection = (TCPClientConnection*) connection->handle;
+    UA_SOCKET clientsockfd = connection->sockfd;
+    UA_ClientConfig *config = UA_Client_getConfig(client);
+    if(!tcpConnection->client)
+        tcpConnection->client = client;
+
+    /* Connection timeout? */
+    if((UA_Double) (UA_DateTime_nowMonotonic() - tcpConnection->connStart)
+       > tcpConnection->timeout * UA_DATETIME_MSEC ) {
+        ClientNetworkLayerTCP_close(connection);
+        UA_LOG_WARNING(&config->logger, UA_LOGCATEGORY_NETWORK, "Timed out");
+        return UA_STATUSCODE_BADDISCONNECT;
+    }
+
+    if(clientsockfd <= 0) {
+        clientsockfd = UA_socket(tcpConnection->server->ai_family,
+                                 tcpConnection->server->ai_socktype,
+                                 tcpConnection->server->ai_protocol);
+        connection->sockfd = (UA_Int32)clientsockfd; /* cast for win32 */
+    }
+
+    if(clientsockfd == UA_INVALID_SOCKET) {
+        UA_LOG_WARNING(&config->logger, UA_LOGCATEGORY_NETWORK,
+                       "Could not create client socket: %s", strerror(UA_ERRNO));
+        ClientNetworkLayerTCP_close(connection);
+        return UA_STATUSCODE_BADDISCONNECT;
+    }
+
+    /* Non blocking connect to be able to timeout */
+    if(UA_socket_set_nonblocking(clientsockfd) != UA_STATUSCODE_GOOD) {
+        UA_LOG_WARNING(&config->logger, UA_LOGCATEGORY_NETWORK,
+                       "Could not set the client socket to nonblocking");
+        ClientNetworkLayerTCP_close(connection);
+        return UA_STATUSCODE_BADDISCONNECT;
+    }
+
+    /* Non blocking connect */
+    int error = UA_connect(clientsockfd, tcpConnection->server->ai_addr,
+                           tcpConnection->server->ai_addrlen);
+
+    if((error == -1) && (UA_ERRNO != UA_ERR_CONNECTION_PROGRESS)) {
+        ClientNetworkLayerTCP_close(connection);
+        UA_LOG_WARNING(&config->logger, UA_LOGCATEGORY_NETWORK,
+                       "Connection to  failed with error: %s", strerror(UA_ERRNO));
+        return UA_STATUSCODE_BADDISCONNECT;
+    }
+
+    /* Use select to wait and check if connected */
+    if(error == -1 && (UA_ERRNO == UA_ERR_CONNECTION_PROGRESS)) {
+        if(tcpConnection->iow.fd == UA_INVALID_SOCKET) {
+            ev_io_init(&tcpConnection->iow, ClientNetworkLayerTCP_eventCallback, clientsockfd, EV_WRITE);
+            tcpConnection->iow.data = data;
+            tcpConnection->loop = (struct ev_loop*)UA_Client_getConfig(client)->externalEventLoop;
+            ev_io_start(tcpConnection->loop, &tcpConnection->iow);
+        }
+    } else {
+        connection->state = UA_CONNECTIONSTATE_ESTABLISHED;
+        return UA_STATUSCODE_GOOD;
+    }
+
+#ifdef SO_NOSIGPIPE
+    int val = 1;
+    int sso_result = setsockopt(connection->sockfd, SOL_SOCKET,
+                                SO_NOSIGPIPE, (void*)&val, sizeof(val));
+    if(sso_result < 0)
+    UA_LOG_WARNING(&config->logger, UA_LOGCATEGORY_NETWORK,
+                    "Couldn't set SO_NOSIGPIPE");
+#endif
+
+    return UA_STATUSCODE_GOOD;
+}
+
+UA_Connection
+UA_ClientConnectionTCP_init_libev(UA_ConnectionConfig config, const UA_String endpointUrl,
+                                  UA_UInt32 timeout, UA_Logger *logger) {
+    UA_initialize_architecture_network();
+
+    UA_Connection connection;
+    memset(&connection, 0, sizeof(UA_Connection));
+
+    connection.state = UA_CONNECTIONSTATE_OPENING;
+    connection.send = connection_write;
+    connection.recv = connection_recv;
+    connection.close = ClientNetworkLayerTCP_close;
+    connection.free = ClientNetworkLayerTCP_free;
+    connection.getSendBuffer = connection_getsendbuffer;
+    connection.releaseSendBuffer = connection_releasesendbuffer;
+    connection.releaseRecvBuffer = connection_releaserecvbuffer;
+
+    TCPClientConnection *tcpClientConnection = (TCPClientConnection*) UA_malloc(
+                    sizeof(TCPClientConnection));
+    memset(tcpClientConnection, 0, sizeof(TCPClientConnection));
+    tcpClientConnection->iow.fd = UA_INVALID_SOCKET;
+    tcpClientConnection->logger = logger;
+    connection.handle = (void*) tcpClientConnection;
+    tcpClientConnection->timeout = timeout;
+    UA_String hostnameString = UA_STRING_NULL;
+    UA_String pathString = UA_STRING_NULL;
+    UA_UInt16 port = 0;
+    char hostname[512];
+    tcpClientConnection->connStart = UA_DateTime_nowMonotonic();
+
+    UA_StatusCode parse_retval = UA_parseEndpointUrl(&endpointUrl,
+                    &hostnameString, &port, &pathString);
+    if(parse_retval != UA_STATUSCODE_GOOD || hostnameString.length > 511) {
+        UA_LOG_WARNING(logger, UA_LOGCATEGORY_NETWORK,
+                       "Server url is invalid: %.*s",
+                       (int)endpointUrl.length, endpointUrl.data);
+        connection.state = UA_CONNECTIONSTATE_CLOSED;
+        return connection;
+    }
+    memcpy(hostname, hostnameString.data, hostnameString.length);
+    hostname[hostnameString.length] = 0;
+
+    if(port == 0) {
+        port = 4840;
+        UA_LOG_INFO(logger, UA_LOGCATEGORY_NETWORK,
+                    "No port defined, using default port %" PRIu16, port);
+    }
+
+    memset(&tcpClientConnection->hints, 0, sizeof(tcpClientConnection->hints));
+    tcpClientConnection->hints.ai_family = AF_UNSPEC;
+    tcpClientConnection->hints.ai_socktype = SOCK_STREAM;
+    char portStr[6];
+    UA_snprintf(portStr, 6, "%d", port);
+    int error = UA_getaddrinfo(hostname, portStr, &tcpClientConnection->hints,
+                    &tcpClientConnection->server);
+    if(error != 0 || !tcpClientConnection->server) {
+        UA_LOG_SOCKET_ERRNO_GAI_WRAP(UA_LOG_WARNING(logger, UA_LOGCATEGORY_NETWORK,
+                                                    "DNS lookup of %s failed with error %s",
+                                                    hostname, errno_str));
+        connection.state = UA_CONNECTIONSTATE_CLOSED;
+        return connection;
+    }
+    return connection;
+}
+
+
 #endif // UA_ENABLE_LIBEV

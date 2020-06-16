@@ -797,6 +797,20 @@ UA_ClientConfig_setDefault(UA_ClientConfig *config) {
     return UA_STATUSCODE_GOOD;
 }
 
+#ifdef UA_ENABLE_LIBEV
+struct ev_loop;
+UA_StatusCode
+UA_ClientConfig_setDefault_libev(UA_ClientConfig *config, struct ev_loop *loop) {
+    UA_StatusCode retval = UA_ClientConfig_setDefault(config);
+    if(retval == UA_STATUSCODE_GOOD) {
+        config->externalEventLoop = loop;
+        config->initConnectionFunc = UA_ClientConnectionTCP_init_libev;
+        config->pollConnectionFunc = UA_ClientConnectionTCP_poll_libev;
+    }
+    return retval;
+}
+#endif
+
 #ifdef UA_ENABLE_ENCRYPTION
 UA_StatusCode
 UA_ClientConfig_setDefaultEncryption(UA_ClientConfig *config,

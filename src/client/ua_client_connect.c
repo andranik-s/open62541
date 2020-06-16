@@ -962,6 +962,9 @@ connectIterate(UA_Client *client, UA_UInt32 timeout) {
         return client->connectStatus;
     case UA_SECURECHANNELSTATE_HEL_SENT:
     case UA_SECURECHANNELSTATE_OPN_SENT:
+#ifdef UA_ENABLE_LIBEV
+        if(!client->config.externalEventLoop)
+#endif
         client->connectStatus = receiveResponseAsync(client, timeout);
         return client->connectStatus;
     default:
@@ -983,10 +986,16 @@ connectIterate(UA_Client *client, UA_UInt32 timeout) {
             requestGetEndpoints(client);
             return client->connectStatus;
         }
+#ifdef UA_ENABLE_LIBEV
+        if(!client->config.externalEventLoop)
+#endif
         receiveResponseAsync(client, timeout);
         return client->connectStatus;
     case UA_SESSIONSTATE_CREATE_REQUESTED:
     case UA_SESSIONSTATE_ACTIVATE_REQUESTED:
+#ifdef UA_ENABLE_LIBEV
+        if(!client->config.externalEventLoop)
+#endif
         receiveResponseAsync(client, timeout);
         return client->connectStatus;
     case UA_SESSIONSTATE_CREATED:
@@ -996,6 +1005,45 @@ connectIterate(UA_Client *client, UA_UInt32 timeout) {
         break;
     }
 
+    return client->connectStatus;
+}
+
+UA_StatusCode
+connectIterate_init(UA_Client *client, UA_UInt32 timeout) {
+    UA_LOG_TRACE(&client->config.logger, UA_LOGCATEGORY_CLIENT,
+                 "Client connect iterate");
+
+    /* Already connected */
+    if(client->sessionState == UA_SESSIONSTATE_ACTIVATED)
+        return UA_STATUSCODE_GOOD;
+
+    /* Could not connect */
+    if(client->connectStatus != UA_STATUSCODE_GOOD)
+        return client->connectStatus;
+
+    /* The connection was already closed */
+    if(client->channel.state == UA_SECURECHANNELSTATE_CLOSING) {
+        client->connectStatus = UA_STATUSCODE_BADCONNECTIONCLOSED;
+        return UA_STATUSCODE_BADCONNECTIONCLOSED;
+    }
+
+    /* TCP connection */
+    if(client->connection.state == UA_CONNECTIONSTATE_CLOSED) {
+        /* Reopen a new TCP connection */
+        client->connection =
+            client->config.initConnectionFunc(client->config.localConnectionConfig,
+                                              client->endpointUrl, client->config.timeout,
+                                              &client->config.logger);
+        /* Poll the connection status */
+        client->connectStatus =
+            client->config.pollConnectionFunc(client, &client->connection, timeout);
+        return client->connectStatus;
+    } else if(client->connection.state == UA_CONNECTIONSTATE_OPENING) {
+        /* Poll the connection status */
+        client->connectStatus =
+            client->config.pollConnectionFunc(client, &client->connection, timeout);
+        return client->connectStatus;
+    }
     return client->connectStatus;
 }
 

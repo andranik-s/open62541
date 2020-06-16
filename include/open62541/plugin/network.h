@@ -141,6 +141,15 @@ void UA_EXPORT
 UA_Server_processBinaryMessage(UA_Server *server, UA_Connection *connection,
                                UA_ByteString *message);
 
+struct UA_Client;
+void UA_EXPORT
+UA_Client_processBinaryMessage(struct UA_Client *client, UA_Connection *connection,
+                               UA_ByteString *message);
+
+void UA_EXPORT
+UA_Client_closeChannel(struct UA_Client *client, UA_StatusCode connectionStatus);
+
+
 /* The server internally cleans up the connection and then calls
  * connection->free. */
 void UA_EXPORT

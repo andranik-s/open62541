@@ -19,6 +19,11 @@ UA_Client UA_EXPORT * UA_Client_new(void);
 UA_StatusCode UA_EXPORT
 UA_ClientConfig_setDefault(UA_ClientConfig *config);
 
+#ifdef UA_ENABLE_LIBEV
+UA_StatusCode UA_EXPORT
+UA_ClientConfig_setDefault_libev(UA_ClientConfig *config, struct ev_loop *loop);
+#endif
+
 #ifdef UA_ENABLE_ENCRYPTION
 UA_StatusCode UA_EXPORT
 UA_ClientConfig_setDefaultEncryption(UA_ClientConfig *config,

@@ -490,6 +490,14 @@ UA_Client_sendAsyncRequest(UA_Client *client, const void *request,
 UA_StatusCode UA_EXPORT
 UA_Client_run_iterate(UA_Client *client, UA_UInt32 timeout);
 
+#ifdef UA_ENABLE_LIBEV
+UA_StatusCode UA_EXPORT
+UA_Client_run_iterate_externalEventLoop(UA_Client *client);
+
+UA_StatusCode UA_EXPORT
+UA_Client_connect_iterate(UA_Client *client, UA_UInt32 timeout);
+#endif
+
 UA_DEPRECATED static UA_INLINE UA_StatusCode
 UA_Client_runAsync(UA_Client *client, UA_UInt32 timeout) {
     return UA_Client_run_iterate(client, timeout);

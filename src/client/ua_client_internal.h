@@ -166,6 +166,9 @@ UA_StatusCode
 connectIterate(UA_Client *client, UA_UInt32 timeout);
 
 UA_StatusCode
+connectIterate_init(UA_Client *client, UA_UInt32 timeout);
+
+UA_StatusCode
 receiveResponseAsync(UA_Client *client, UA_UInt32 timeout);
 
 _UA_END_DECLS

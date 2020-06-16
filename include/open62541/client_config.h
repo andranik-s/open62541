@@ -132,6 +132,9 @@ typedef struct {
                                            UA_UInt32 subscriptionId,
                                            void *subContext);
 #endif
+#ifdef UA_ENABLE_LIBEV
+    void *externalEventLoop;
+#endif
 } UA_ClientConfig;
 
 _UA_END_DECLS
