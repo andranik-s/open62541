@@ -158,27 +158,35 @@ typedef struct ConnectionEntry {
 
 typedef struct {
     const UA_Logger *logger;
-    struct ev_loop *loop;
     UA_UInt16 port;
     UA_UInt16 maxConnections;
     LIST_HEAD(, ConnectionEntry) connections;
     UA_UInt16 connectionsSize;
     UA_ServerNetworkLayer *nl;
     UA_Server *server;
+    struct ev_loop *loop;
+    ev_io listener;
 } ServerNetworkLayerTCP_libev;
+
+typedef struct {
+    ServerNetworkLayerTCP_libev *layer;
+    ev_io watcher;
+} ConnectionHandle;
 
 static void
 ServerNetworkLayerTCP_freeConnection(UA_Connection *connection) {
+    UA_free(connection->handle);
     UA_free(connection);
 }
 
-/* This performs only 'shutdown'. 'close' is called when the shutdown
- * socket is returned from select. */
 static void
 ServerNetworkLayerTCP_close(UA_Connection *connection) {
     if(connection->state == UA_CONNECTIONSTATE_CLOSED)
         return;
+    ConnectionHandle *chandle = (ConnectionHandle*)connection->handle;
+    ev_io_stop(chandle->layer->loop, &chandle->watcher);
     UA_shutdown((UA_SOCKET)connection->sockfd, 2);
+    UA_close(connection->sockfd);
     connection->state = UA_CONNECTIONSTATE_CLOSED;
 }
 
@@ -189,7 +197,7 @@ purgeFirstConnectionWithoutChannel(ServerNetworkLayerTCP_libev *layer) {
         if(e->connection.channel == NULL) {
             LIST_REMOVE(e, pointers);
             layer->connectionsSize--;
-            UA_close(e->connection.sockfd);
+            e->connection.close(&e->connection);
             e->connection.free(&e->connection);
             return true;
         }
@@ -201,7 +209,7 @@ static void
 layerRecvCallback(struct ev_loop *loop, ev_io *w, int revents)
 {
     ConnectionEntry *e = (ConnectionEntry*)w->data;
-    ServerNetworkLayerTCP_libev *layer = (ServerNetworkLayerTCP_libev*)e->connection.handle;
+    ServerNetworkLayerTCP_libev *layer = ((ConnectionHandle*)e->connection.handle)->layer;
     UA_ServerNetworkLayer *nl = layer->nl;
 
     UA_LOG_TRACE(layer->logger, UA_LOGCATEGORY_NETWORK,
@@ -301,9 +309,11 @@ layerAcceptCallback(struct ev_loop *loop, ev_io *w, int revents)
     }
 
     UA_Connection *c = &e->connection;
+    ConnectionHandle *connectionHandle = (ConnectionHandle*)UA_calloc(1, sizeof(ConnectionHandle));
+    connectionHandle->layer = layer;
     memset(c, 0, sizeof(UA_Connection));
     c->sockfd = newsockfd;
-    c->handle = layer;
+    c->handle = connectionHandle;
     c->send = connection_write;
     c->close = ServerNetworkLayerTCP_close;
     c->free = ServerNetworkLayerTCP_freeConnection;
@@ -313,6 +323,10 @@ layerAcceptCallback(struct ev_loop *loop, ev_io *w, int revents)
     c->state = UA_CONNECTIONSTATE_OPENING;
     c->openingDate = UA_DateTime_nowMonotonic();
 
+    ev_io_init(&connectionHandle->watcher, &layerRecvCallback, newsockfd, EV_READ);
+    connectionHandle->watcher.data = e;
+    ev_io_start(loop, &connectionHandle->watcher);
+
     /* Add to the linked list */
     LIST_INSERT_HEAD(&layer->connections, e, pointers);
     UA_ServerNetworkLayer *nl = layer->nl;
@@ -320,11 +334,7 @@ layerAcceptCallback(struct ev_loop *loop, ev_io *w, int revents)
         nl->statistics->currentConnectionCount++;
         nl->statistics->cumulatedConnectionCount++;
     }
-
-    struct ev_io *neww = (struct ev_io*)UA_malloc(sizeof(struct ev_io));
-    ev_io_init(neww, &layerRecvCallback, newsockfd, EV_READ);
-    neww->data = e;
-    ev_io_start(loop, neww);
+    layer->connectionsSize++;
 }
 
 static UA_StatusCode
@@ -379,10 +389,9 @@ initListenerSocket(ServerNetworkLayerTCP_libev *layer)
         return UA_STATUSCODE_BADCOMMUNICATIONERROR;
     }
 
-    struct ev_io *w = (struct ev_io*)UA_malloc(sizeof(struct ev_io));
-    ev_io_init(w, layerAcceptCallback, listener, EV_READ);
-    w->data = (void*)layer;
-    ev_io_start(layer->loop, w);
+    ev_io_init(&layer->listener, layerAcceptCallback, listener, EV_READ);
+    layer->listener.data = layer;
+    ev_io_start(layer->loop, &layer->listener);
 
     return UA_STATUSCODE_GOOD;
 }
@@ -411,11 +420,39 @@ ServerNetworkLayerTCP_libev_listen(UA_ServerNetworkLayer *nl, UA_Server *server,
 static void
 ServerNetworkLayerTCP_libev_stop(UA_ServerNetworkLayer *nl, UA_Server *server)
 {
+    ServerNetworkLayerTCP_libev *layer = (ServerNetworkLayerTCP_libev*)nl->handle;
+    UA_LOG_INFO(layer->logger, UA_LOGCATEGORY_NETWORK,
+                "Shutting down the TCP network layer");
+
+    /* Close the server sockets */
+    ev_io_stop(layer->loop, &layer->listener);
+    UA_shutdown(layer->listener.fd, 2);
+    UA_close(layer->listener.fd);
+
+    /* Close open connections */
+    ConnectionEntry *e;
+    LIST_FOREACH(e, &layer->connections, pointers)
+        ServerNetworkLayerTCP_close(&e->connection);
+
+    UA_deinitialize_architecture_network();
 }
 
 static void
-ServerNetworkLayerTCP_libev_deleteMembers(UA_ServerNetworkLayer *nl)
-{
+ServerNetworkLayerTCP_libev_deleteMembers(UA_ServerNetworkLayer *nl) {
+    ServerNetworkLayerTCP_libev *layer = (ServerNetworkLayerTCP_libev*)nl->handle;
+    UA_String_deleteMembers(&nl->discoveryUrl);
+
+    ConnectionEntry *e, *e_tmp;
+    LIST_FOREACH_SAFE(e, &layer->connections, pointers, e_tmp) {
+        LIST_REMOVE(e, pointers);
+        layer->connectionsSize--;
+        ServerNetworkLayerTCP_close(&e->connection);
+        ServerNetworkLayerTCP_freeConnection(&e->connection);
+        if(nl->statistics) {
+            nl->statistics->currentConnectionCount--;
+        }
+    }
+    UA_free(layer);
 }
 
 UA_ServerNetworkLayer

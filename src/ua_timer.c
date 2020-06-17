@@ -97,6 +97,7 @@ addCallback(UA_Timer *t, UA_ApplicationCallback callback, void *application, voi
     te->repeated = repeated;
     te->nextTime = nextTime;
 #ifdef UA_ENABLE_LIBEV
+    te->timer = NULL;
     if(t->loop) {
         double interv = repeated ? (double)interval/UA_DATETIME_SEC : 0;
         double first = repeated ? interv : (double)(nextTime - UA_DateTime_nowMonotonic()) / UA_DATETIME_SEC;
