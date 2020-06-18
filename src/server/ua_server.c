@@ -274,6 +274,9 @@ UA_Server_init(UA_Server *server) {
 
     /* Initialize the handling of repeated callbacks */
     UA_Timer_init(&server->timer);
+#ifdef UA_ENABLE_LIBEV
+    server->timer.loop = server->config.externalEventLoop;
+#endif
 
     UA_WorkQueue_init(&server->workQueue);
 
@@ -783,15 +786,3 @@ UA_Server_AccessControl_allowHistoryUpdateDeleteRawModified(UA_Server *server,
 
 }
 #endif /* UA_ENABLE_HISTORIZING */
-
-#ifdef UA_ENABLE_LIBEV
-UA_StatusCode UA_EXPORT UA_THREADSAFE
-UA_Server_setExternalEventLoop_libev(UA_Server *server, struct ev_loop *loop) {
-    if(!server->config.externalEventLoop) {
-        server->config.externalEventLoop = loop;
-        server->timer.loop = loop;
-        return UA_STATUSCODE_GOOD;
-    }
-    return UA_STATUSCODE_BADALREADYEXISTS;
-}
-#endif

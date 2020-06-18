@@ -50,6 +50,19 @@ UA_Server_new() {
     return UA_Server_newWithConfig(&config);
 }
 
+#ifdef UA_ENABLE_LIBEV
+UA_Server *
+UA_Server_newWithExternalLoop(void *loop) {
+    UA_ServerConfig config;
+    memset(&config, 0, sizeof(UA_ServerConfig));
+    /* Set a default logger and NodeStore for the initialization */
+    config.logger = UA_Log_Stdout_;
+    UA_Nodestore_HashMap(&config.nodestore);
+    config.externalEventLoop = loop;
+    return UA_Server_newWithConfig(&config);
+}
+#endif
+
 /*******************************/
 /* Default Connection Settings */
 /*******************************/

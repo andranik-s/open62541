@@ -18,6 +18,11 @@ _UA_BEGIN_DECLS
  * initialization. No network layer and SecurityPolicies are set so far. */
 UA_Server UA_EXPORT * UA_Server_new(void);
 
+#ifdef UA_ENABLE_LIBEV
+UA_Server UA_EXPORT *
+UA_Server_newWithExternalLoop(void *loop);
+#endif
+
 /**********************/
 /* Default Connection */
 /**********************/

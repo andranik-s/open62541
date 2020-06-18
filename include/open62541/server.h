@@ -1614,12 +1614,6 @@ typedef struct {
 
 UA_ServerStatistics UA_Server_getStatistics(UA_Server *server);
 
-#ifdef UA_ENABLE_LIBEV
-struct ev_loop;
-UA_StatusCode UA_EXPORT UA_THREADSAFE
-UA_Server_setExternalEventLoop_libev(UA_Server *server, struct ev_loop *loop);
-#endif
-
 _UA_END_DECLS
 
 #endif /* UA_SERVER_H_ */
