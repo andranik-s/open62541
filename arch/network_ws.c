@@ -8,6 +8,7 @@
 
 #define UA_INTERNAL
 
+#include <open62541/server_config.h>
 #include <open62541/network_ws.h>
 #include <open62541/plugin/log_stdout.h>
 #include <open62541/util.h>
@@ -241,7 +242,7 @@ const struct lws_protocol_vhost_options pvo = {NULL, &pvo_opt, "opcua", ""};
 
 static UA_StatusCode
 ServerNetworkLayerWS_start(UA_ServerNetworkLayer *nl,
-                           UA_Server *_, const UA_String *customHostname) {
+                           UA_Server *server, const UA_String *customHostname) {
     UA_initialize_architecture_network();
 
     ServerNetworkLayerWS *layer = (ServerNetworkLayerWS *)nl->handle;
@@ -282,17 +283,25 @@ ServerNetworkLayerWS_start(UA_ServerNetworkLayer *nl,
     info.port = layer->port;
     info.protocols = protocols;
     info.vhost_name = (char *)nl->discoveryUrl.data;
-    info.ws_ping_pong_interval = 10;
+    /* ws_ping_pong_interval is deleted in newer versions of libwebsockets
+     * info.ws_ping_pong_interval = 10; */
     info.options = LWS_SERVER_OPTION_HTTP_HEADERS_SECURITY_BEST_PRACTICES_ENFORCE;
     info.pvo = &pvo;
     info.user = layer;
-
+#if defined(UA_ENABLE_LIBEV) && !defined(LWS_WITH_LIBEV) /* TODO: move to cmake */
+#   error "If UA_ENABLE_LIBEV is used then libwebsockets should be compiled with LWS_WITH_LIBEV"
+#endif
+#ifdef UA_ENABLE_LIBEV
+    info.options |= LWS_SERVER_OPTION_LIBEV;
+    info.foreign_loops = &UA_Server_getConfig(server)->externalEventLoop;
+#endif
     struct lws_context *context = lws_create_context(&info);
     if(!context) {
         UA_LOG_ERROR(layer->logger, UA_LOGCATEGORY_NETWORK, "lws init failed");
         return UA_STATUSCODE_BADOUTOFMEMORY;
     }
     layer->context = context;
+    layer->server = server;
     return UA_STATUSCODE_GOOD;
 }
 
