@@ -354,7 +354,8 @@ addServerSocket(ServerNetworkLayerTCP *layer, struct addrinfo *ai) {
 }
 
 static UA_StatusCode
-ServerNetworkLayerTCP_start(UA_ServerNetworkLayer *nl, const UA_String *customHostname) {
+ServerNetworkLayerTCP_start(UA_ServerNetworkLayer *nl, UA_Server *_,
+                            const UA_String *customHostname) {
   UA_initialize_architecture_network();
 
     ServerNetworkLayerTCP *layer = (ServerNetworkLayerTCP *)nl->handle;

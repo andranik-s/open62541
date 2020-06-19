@@ -8,6 +8,9 @@
 
 #include "ua_util_internal.h"
 #include "ua_timer.h"
+#ifdef UA_ENABLE_LIBEV
+#include <ev.h>
+#endif
 
 struct UA_TimerEntry {
     ZIP_ENTRY(UA_TimerEntry) zipfields;
@@ -22,6 +25,9 @@ struct UA_TimerEntry {
 
     ZIP_ENTRY(UA_TimerEntry) idZipfields;
     UA_UInt64 id;                            /* Id of the entry */
+#ifdef UA_ENABLE_LIBEV
+    ev_timer *timer;
+#endif
 };
 
 /* There may be several entries with the same nextTime in the tree. We give them
@@ -61,6 +67,14 @@ UA_Timer_init(UA_Timer *t) {
     memset(t, 0, sizeof(UA_Timer));
 }
 
+#ifdef UA_ENABLE_LIBEV
+static void
+timerCallback(struct ev_loop *loop, ev_timer *t, int revents) {
+    UA_TimerEntry *te = (UA_TimerEntry*)t->data;
+    te->callback(te->application, te->data);
+}
+#endif
+
 static UA_StatusCode
 addCallback(UA_Timer *t, UA_ApplicationCallback callback, void *application, void *data,
             UA_DateTime nextTime, UA_UInt64 interval, UA_Boolean repeated,
@@ -82,6 +96,18 @@ addCallback(UA_Timer *t, UA_ApplicationCallback callback, void *application, voi
     te->data = data;
     te->repeated = repeated;
     te->nextTime = nextTime;
+#ifdef UA_ENABLE_LIBEV
+    te->timer = NULL;
+    if(t->loop) {
+        double interv = repeated ? (double)interval/UA_DATETIME_SEC : 0;
+        double first = repeated ? interv : (double)(nextTime - UA_DateTime_nowMonotonic()) / UA_DATETIME_SEC;
+        if(first < 0) first = 0;
+        te->timer = (ev_timer*)UA_malloc(sizeof(ev_timer));
+        ev_timer_init(te->timer, &timerCallback, first, interv);
+        te->timer->data = te;
+        ev_timer_start((struct ev_loop*)t->loop, te->timer);
+    }
+#endif
 
     /* Set the output identifier */
     if(callbackId)
@@ -133,6 +159,10 @@ UA_Timer_changeRepeatedCallbackInterval(UA_Timer *t, UA_UInt64 callbackId,
     te->interval = (UA_UInt64)(interval_ms * UA_DATETIME_MSEC); /* in 100ns resolution */
     te->nextTime = UA_DateTime_nowMonotonic() + (UA_DateTime)te->interval;
     ZIP_INSERT(UA_TimerZip, &t->root, te, ZIP_RANK(te, zipfields));
+#ifdef UA_ENABLE_LIBEV
+    if(te->timer)
+        te->timer->repeat = interval_ms/1000.0;
+#endif
     return UA_STATUSCODE_GOOD;
 }
 
@@ -142,6 +172,12 @@ UA_Timer_removeCallback(UA_Timer *t, UA_UInt64 callbackId) {
     if(!te)
         return;
 
+#ifdef UA_ENABLE_LIBEV
+    if(te->timer) {
+        ev_timer_stop((struct ev_loop*)t->loop, te->timer);
+        UA_free(te->timer);
+    }
+#endif
     ZIP_REMOVE(UA_TimerZip, &t->root, te);
     ZIP_REMOVE(UA_TimerIdZip, &t->idRoot, te);
     UA_free(te);
@@ -185,12 +221,19 @@ UA_Timer_process(UA_Timer *t, UA_DateTime nowMonotonic,
 
 static void
 freeEntry(UA_TimerEntry *te, void *data) {
+#ifdef UA_ENABLE_LIBEV
+    if(te->timer) {
+        ev_timer_stop((struct ev_loop*)((UA_Timer*)data)->loop, te->timer);
+        UA_free(te->timer);
+    }
+#endif
+    (void)data;
     UA_free(te);
 }
 
 void
 UA_Timer_deleteMembers(UA_Timer *t) {
     /* Free all nodes and reset the root */
-    ZIP_ITER(UA_TimerZip, &t->root, freeEntry, NULL);
+    ZIP_ITER(UA_TimerZip, &t->root, freeEntry, t);
     ZIP_INIT(&t->root);
 }

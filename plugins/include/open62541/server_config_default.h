@@ -18,6 +18,11 @@ _UA_BEGIN_DECLS
  * initialization. No network layer and SecurityPolicies are set so far. */
 UA_Server UA_EXPORT * UA_Server_new(void);
 
+#ifdef UA_ENABLE_LIBEV
+UA_Server UA_EXPORT *
+UA_Server_newWithExternalLoop(void *loop);
+#endif
+
 /**********************/
 /* Default Connection */
 /**********************/
@@ -123,6 +128,12 @@ UA_ServerConfig_addNetworkLayerTCP(UA_ServerConfig *conf, UA_UInt16 portNumber,
 UA_EXPORT UA_StatusCode
 UA_ServerConfig_addNetworkLayerWS(UA_ServerConfig *conf, UA_UInt16 portNumber,
                                   UA_UInt32 sendBufferSize, UA_UInt32 recvBufferSize);
+#endif
+
+#ifdef UA_ENABLE_LIBEV
+UA_EXPORT UA_StatusCode
+UA_ServerConfig_addNetworkLayerTCP_libev(UA_ServerConfig *conf, UA_UInt16 portNumber,
+                                         UA_UInt32 sendBufferSize, UA_UInt32 recvBufferSize);
 #endif
 
 /* Adds the security policy ``SecurityPolicy#None`` to the server. A

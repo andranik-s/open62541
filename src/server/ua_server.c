@@ -279,6 +279,9 @@ UA_Server_init(UA_Server *server) {
 
     /* Initialize the handling of repeated callbacks */
     UA_Timer_init(&server->timer);
+#ifdef UA_ENABLE_LIBEV
+    server->timer.loop = server->config.externalEventLoop;
+#endif
 
     UA_WorkQueue_init(&server->workQueue);
 
@@ -591,7 +594,7 @@ UA_Server_run_startup(UA_Server *server) {
     for(size_t i = 0; i < server->config.networkLayersSize; ++i) {
         UA_ServerNetworkLayer *nl = &server->config.networkLayers[i];
         nl->statistics = &server->serverStats.ns;
-        result |= nl->start(nl, &server->config.customHostname);
+        result |= nl->start(nl, server, &server->config.customHostname);
     }
 
     /* Update the application description to match the previously added discovery urls.
